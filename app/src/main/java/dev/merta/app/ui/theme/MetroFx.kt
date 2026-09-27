@@ -1,26 +1,21 @@
 package dev.merta.app.ui.theme
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.drawable.BitmapDrawable
 import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import dev.merta.app.data.wallpaper.WallpaperBitmaps
 
 /**
- * Аппаратный блюр + vibrancy для фоновых слоёв (порт из metro-anime).
- * На API < 31 возвращает модификатор без изменений (там спасает димминг).
+ * Аппаратный блюр + vibrancy для оверлеев (порт из metro-anime).
+ * На API < 31 возвращает модификатор без изменений.
  */
 fun Modifier.metroBlurEffect(
     radiusPx: Float = 48f,
@@ -49,39 +44,17 @@ fun Modifier.metroBlurEffect(
 }
 
 /**
- * Фон из системных обоев (как в metro-anime): кроп на весь экран + блюр + димминг.
- * null (нет доступа к обоям) = чистый чёрный фон.
+ * Слой обоев на весь экран (как в metro-anime): предблюренный битмап + димминг.
+ * Без обоев — чистый чёрный фон.
  */
 @Composable
-fun WallpaperBackground(dimAlpha: Float = 0.55f) {
-    val context = LocalContext.current
-    val bmp = remember {
-        try {
-            val wm = context.getSystemService(android.content.Context.WALLPAPER_SERVICE) as android.app.WallpaperManager
-            val drawable = wm.drawable ?: return@remember null
-            val intrinsic = (drawable as? BitmapDrawable)?.bitmap?.let { src ->
-                val scale = (512f / src.width).coerceAtMost(1f)
-                if (scale >= 1f) src
-                else Bitmap.createScaledBitmap(src, (src.width * scale).toInt(), (src.height * scale).toInt(), true)
-            } ?: run {
-                val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: 512
-                val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: 512
-                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
-                    drawable.setBounds(0, 0, w, h)
-                    drawable.draw(Canvas(it))
-                }
-            }
-            intrinsic
-        } catch (_: Exception) {
-            null
-        }
-    }
-    if (bmp != null) {
+fun WallpaperLayer(bitmaps: WallpaperBitmaps?, blurEnabled: Boolean, dimAlpha: Float) {
+    if (bitmaps != null) {
         Image(
-            bitmap = bmp.asImageBitmap(),
+            bitmap = if (blurEnabled) bitmaps.blurred else bitmaps.sharp,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().metroBlurEffect(),
+            modifier = Modifier.fillMaxSize(),
         )
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dimAlpha)))
     } else {

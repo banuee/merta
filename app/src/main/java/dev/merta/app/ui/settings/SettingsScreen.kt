@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.merta.app.data.agent.AgentFiles
 import dev.merta.app.data.settings.MertaSettings
+import dev.merta.app.data.wallpaper.WallpaperRepository
 import dev.merta.app.data.workspace.WorkspaceStore
 import dev.merta.app.ui.sessions.MetroSmallButton
 import dev.merta.app.ui.theme.LocalMetroScheme
@@ -58,6 +59,7 @@ fun SettingsScreen(
     settings: MertaSettings,
     agentFiles: AgentFiles,
     workspace: WorkspaceStore,
+    wallpaper: WallpaperRepository,
     onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
     onBack: () -> Unit,
@@ -255,6 +257,10 @@ fun SettingsScreen(
             color = scheme.textDim,
             modifier = Modifier.padding(top = 6.dp),
         )
+
+        Spacer(Modifier.height(16.dp))
+        SectionLabel("ОБОИ")
+        WallpaperSection(wallpaper)
 
         Spacer(Modifier.height(16.dp))
         SectionLabel("ОБНОВЛЕНИЯ")

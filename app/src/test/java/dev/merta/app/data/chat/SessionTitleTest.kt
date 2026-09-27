@@ -39,3 +39,13 @@ class FrontmatterTest {
         assertEquals("" to "", AgentFiles.parseFrontmatter("# просто текст"))
     }
 }
+
+class ThinkFormatTest {
+
+    @Test
+    fun formats() {
+        assertEquals("0с", dev.merta.app.ui.chat.formatThinkMs(200))
+        assertEquals("12с", dev.merta.app.ui.chat.formatThinkMs(12345))
+        assertEquals("1м 05с", dev.merta.app.ui.chat.formatThinkMs(65000))
+    }
+}

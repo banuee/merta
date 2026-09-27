@@ -5,11 +5,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +29,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.merta.app.data.agent.AgentFiles
 import dev.merta.app.data.settings.MertaSettings
+import dev.merta.app.data.wallpaper.WallpaperRepository
 import dev.merta.app.data.workspace.WorkspaceStore
 import dev.merta.app.ui.chat.ChatScreen
 import dev.merta.app.ui.chat.ChatViewModel
@@ -64,7 +70,14 @@ class MertaActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(Color.Black),
                 ) {
-                    dev.merta.app.ui.theme.WallpaperBackground()
+                    val wpRepo = remember { WallpaperRepository(applicationContext) }
+                    val wp by wpRepo.wallpaper.collectAsState()
+                    val wpSettings by wpRepo.settings.collectAsState()
+                    dev.merta.app.ui.theme.WallpaperLayer(
+                        bitmaps = wp,
+                        blurEnabled = wpSettings.blurEnabled,
+                        dimAlpha = wpSettings.backgroundDim,
+                    )
                     Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                     val vm: ChatViewModel = viewModel(
                         factory = object : ViewModelProvider.Factory {
@@ -87,7 +100,21 @@ class MertaActivity : ComponentActivity() {
                     var settingsTick by remember { mutableStateOf(0) }
                     var providersTick by remember { mutableStateOf(0) }
 
-                    when (route) {
+                    // Плавные переходы между экранами (pop + fade в кривых Metro).
+                    AnimatedContent(
+                        targetState = route,
+                        transitionSpec = {
+                            (fadeIn(animationSpec = androidx.compose.animation.core.tween(220, easing = dev.merta.app.ui.theme.MetroAnimations.OpenEasing)) +
+                                androidx.compose.animation.scaleIn(
+                                    initialScale = 0.97f,
+                                    animationSpec = androidx.compose.animation.core.tween(240, easing = dev.merta.app.ui.theme.MetroAnimations.OpenEasing),
+                                )).togetherWith(
+                                fadeOut(animationSpec = androidx.compose.animation.core.tween(160, easing = dev.merta.app.ui.theme.MetroAnimations.CloseEasing)),
+                            )
+                        },
+                        label = "route",
+                    ) { target ->
+                        when (target) {
                         Route.CHAT -> ChatScreen(
                             vm,
                             onOpenSettings = { route = Route.SETTINGS },
@@ -105,6 +132,7 @@ class MertaActivity : ComponentActivity() {
                                 settings = settings,
                                 agentFiles = agentFiles,
                                 workspace = workspace,
+                                wallpaper = wpRepo,
                                 onOpenModels = { route = Route.MODELS },
                                 onOpenProviders = { route = Route.PROVIDERS },
                                 onBack = { route = Route.CHAT },
@@ -152,6 +180,7 @@ class MertaActivity : ComponentActivity() {
                                 route = Route.CHAT
                             },
                         )
+                        }
                     }
                     } // systemBarsPadding
                 } // root (обои)

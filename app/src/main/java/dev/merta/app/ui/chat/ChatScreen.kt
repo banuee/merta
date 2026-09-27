@@ -174,7 +174,12 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(ui.messages, key = { it.id }) { msg ->
-                MessageBubble(msg.role, msg.text, Modifier.animateItem())
+                val thought = msg.thought
+                if (msg.role == ChatMessage.Role.THINKING && thought != null) {
+                    ThoughtRow(thought, Modifier.animateItem())
+                } else {
+                    MessageBubble(msg.role, msg.text, Modifier.animateItem())
+                }
             }
             if (ui.streaming != null) {
                 item(key = "streaming") {
@@ -302,13 +307,75 @@ private fun EffortRow(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** Строка мышления в ленте (как в opencode): раскрывается вниз по тапу. */
+@Composable
+private fun ThoughtRow(thought: ThoughtData, modifier: Modifier = Modifier) {
+    val scheme = LocalMetroScheme.current
+    var expanded by remember(thought.startedMs) { mutableStateOf(thought.active) }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(MetroDimens.radius))
+            .background(scheme.glass)
+            .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radius))
+            .metroClickable(targetScale = 0.99f) { expanded = !expanded }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (thought.active) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    color = scheme.accent,
+                    modifier = Modifier.width(15.dp).height(15.dp),
+                )
+                Text(
+                    text = thought.steps.lastOrNull() ?: "Думаю…",
+                    fontFamily = MetroFonts.text,
+                    fontSize = 13.sp,
+                    color = scheme.text,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Text("\u25C8", fontFamily = MetroFonts.text, fontSize = 12.sp, color = scheme.accent)
+                Text(
+                    text = "Thought · " + formatThinkMs(thought.lastMs ?: 0) +
+                        (if (thought.steps.isNotEmpty()) " · шагов: " + thought.steps.size else ""),
+                    fontFamily = MetroFonts.text,
+                    fontSize = 13.sp,
+                    color = scheme.textDim,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = expanded,
+            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
+        ) {
+            Column(modifier = Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (thought.steps.isEmpty()) {
+                    Text("Пока тихо.", fontFamily = MetroFonts.text, fontSize = 13.sp, color = scheme.textDim)
+                }
+                for (step in thought.steps) {
+                    Text(step, fontFamily = MetroFonts.text, fontSize = 13.sp, color = scheme.textDim)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun MessageBubble(role: ChatMessage.Role, text: String, modifier: Modifier = Modifier) {
     val scheme = LocalMetroScheme.current
     val bubble = when (role) {
         ChatMessage.Role.USER -> scheme.accent.copy(alpha = 0.22f)
         ChatMessage.Role.ASSISTANT -> scheme.glass
-        ChatMessage.Role.SYSTEM -> Color.Transparent
+        else -> Color.Transparent
     }
     val border = when (role) {
         ChatMessage.Role.USER -> scheme.accent.copy(alpha = 0.45f)

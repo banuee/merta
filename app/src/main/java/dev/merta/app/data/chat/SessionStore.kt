@@ -1,6 +1,7 @@
 package dev.merta.app.data.chat
 
 import dev.merta.app.ui.chat.ChatMessage
+import dev.merta.app.ui.chat.ThoughtData
 import java.io.File
 import java.util.UUID
 import org.json.JSONArray
@@ -47,14 +48,27 @@ class SessionStore(private val chatsDir: File) {
             val arr = JSONObject(f.readText()).optJSONArray("messages") ?: return emptyList()
             List(arr.length()) { i ->
                 val o = arr.getJSONObject(i)
+                val role = when (o.optString("role")) {
+                    "user" -> ChatMessage.Role.USER
+                    "assistant" -> ChatMessage.Role.ASSISTANT
+                    "thinking" -> ChatMessage.Role.THINKING
+                    else -> ChatMessage.Role.SYSTEM
+                }
+                val thought = if (role == ChatMessage.Role.THINKING) {
+                    ThoughtData(
+                        active = false,
+                        startedMs = 0L,
+                        steps = o.optString("text", "").lines().filter { it.isNotBlank() },
+                        lastMs = o.optLong("thinkMs", -1L).takeIf { it >= 0 },
+                    )
+                } else {
+                    null
+                }
                 ChatMessage(
                     id = o.optLong("id", i.toLong()),
-                    role = when (o.optString("role")) {
-                        "user" -> ChatMessage.Role.USER
-                        "assistant" -> ChatMessage.Role.ASSISTANT
-                        else -> ChatMessage.Role.SYSTEM
-                    },
+                    role = role,
                     text = o.optString("text", ""),
+                    thought = thought,
                 )
             }
         } catch (_: Exception) {
@@ -67,12 +81,14 @@ class SessionStore(private val chatsDir: File) {
             chatsDir.mkdirs()
             val arr = JSONArray()
             for (m in messages) {
-                arr.put(
-                    JSONObject()
-                        .put("id", m.id)
-                        .put("role", m.role.name.lowercase())
-                        .put("text", m.text),
-                )
+                val o = JSONObject()
+                    .put("id", m.id)
+                    .put("role", m.role.name.lowercase())
+                    .put("text", if (m.role == ChatMessage.Role.THINKING) m.thought?.steps?.joinToString("\n") ?: "" else m.text)
+                if (m.role == ChatMessage.Role.THINKING) {
+                    o.put("thinkMs", m.thought?.lastMs ?: -1L)
+                }
+                arr.put(o)
             }
             val root = JSONObject()
                 .put("id", id)

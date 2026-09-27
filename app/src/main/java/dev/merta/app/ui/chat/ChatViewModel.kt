@@ -255,7 +255,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (system.isNotBlank()) transcript.add(TurnMessage("system", system))
         transcript.addAll(
             _state.value.messages
-                .filter { it.role != ChatMessage.Role.SYSTEM }
+                .filter { it.role == ChatMessage.Role.USER || it.role == ChatMessage.Role.ASSISTANT }
                 .map {
                     TurnMessage(
                         role = if (it.role == ChatMessage.Role.USER) "user" else "assistant",
@@ -266,6 +266,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val client = makeProvider(provider) as OpenAiCompatClient
         val effort = settings.load().effort
         val registry = toolRegistry()
+        val thinkStart = System.currentTimeMillis()
+        val thoughtId = nextId()
+        push(ChatMessage(thoughtId, ChatMessage.Role.THINKING, "", ThoughtData(active = true, startedMs = thinkStart)))
         _state.update { it.copy(sending = true, streaming = "") }
         streamJob = viewModelScope.launch {
             try {
@@ -279,13 +282,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
                             override fun onToolStart(name: String, summary: String) {
                                 push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "\u2699 " + summary))
+                                addThinkStep(thoughtId, "\u2699 " + summary)
                             }
 
-                            override suspend fun onApproval(approval: PendingApproval): Boolean =
-                                waitApproval(approval)
+                            override suspend fun onApproval(approval: PendingApproval): Boolean {
+                                addThinkStep(thoughtId, "ожидание: " + approval.summary)
+                                return waitApproval(approval)
+                            }
                         },
                     )
                 }
+                finishThought(thoughtId, System.currentTimeMillis() - thinkStart)
                 _state.update { it.copy(streaming = null, sending = false) }
                 if (full.isNotBlank()) push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, full))
             } catch (e: LlmException) {
@@ -293,6 +300,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
+                finishThought(thoughtId, System.currentTimeMillis() - thinkStart)
             }
             persist()
         }
@@ -303,7 +311,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         streamJob?.cancel()
         streamJob = null
         val partial = _state.value.streaming
-        _state.update { it.copy(streaming = null, sending = false) }
+        val now = System.currentTimeMillis()
+        _state.update { st ->
+            st.copy(
+                streaming = null,
+                sending = false,
+                messages = st.messages.map { m ->
+                    val t = m.thought
+                    if (t != null && t.active) {
+                        m.copy(thought = t.copy(active = false, lastMs = now - t.startedMs))
+                    } else {
+                        m
+                    }
+                },
+            )
+        }
         if (keepPartial && !partial.isNullOrBlank()) {
             push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, partial))
             persist()
@@ -337,6 +359,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         429 -> "Ошибка 429: квота/лимит провайдера. Подожди или смени модель."
         -1 -> e.message ?: "Ошибка сети."
         else -> "Ошибка ${e.status}: ${e.message}"
+    }
+
+
+    private fun addThinkStep(thoughtId: Long, step: String) {
+        _state.update { st ->
+            st.copy(
+                messages = st.messages.map { m ->
+                    if (m.id == thoughtId && m.thought != null) {
+                        m.copy(thought = m.thought.copy(steps = m.thought.steps + step))
+                    } else {
+                        m
+                    }
+                },
+            )
+        }
+    }
+
+    private fun finishThought(thoughtId: Long, tookMs: Long) {
+        _state.update { st ->
+            st.copy(
+                messages = st.messages.map { m ->
+                    if (m.id == thoughtId && m.thought != null) {
+                        m.copy(thought = m.thought.copy(active = false, lastMs = tookMs))
+                    } else {
+                        m
+                    }
+                },
+            )
+        }
     }
 
     private fun push(msg: ChatMessage) {
