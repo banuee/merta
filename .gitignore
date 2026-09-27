@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+*.iml
+# Внутренние рабочие заметки и локальные артефакты — не коммитить:
+AGENTS.md
+graphify-out/
+*.keystore
+*.jks
+*.apk
+github_token
+.gemini/
+scratch/
