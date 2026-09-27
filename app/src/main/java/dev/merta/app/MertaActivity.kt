@@ -1,18 +1,22 @@
 package dev.merta.app
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
@@ -24,6 +28,7 @@ import dev.merta.app.data.workspace.WorkspaceStore
 import dev.merta.app.ui.chat.ChatScreen
 import dev.merta.app.ui.chat.ChatViewModel
 import dev.merta.app.ui.models.ModelsScreen
+import dev.merta.app.ui.providers.ProvidersScreen
 import dev.merta.app.ui.sessions.SessionsScreen
 import dev.merta.app.ui.settings.SettingsScreen
 import dev.merta.app.ui.theme.MetroTheme
@@ -40,7 +45,27 @@ class MertaActivity : ComponentActivity() {
                 isAppearanceLightNavigationBars = false
             }
             MetroTheme {
-                Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
+                // Бары: прозрачные + светлые иконки, без системного контрастного форсинга
+                // (иначе на части прошивок статус/навбар белеют, как на скриншоте с телефона).
+                SideEffect {
+                    window.statusBarColor = android.graphics.Color.TRANSPARENT
+                    window.navigationBarColor = android.graphics.Color.TRANSPARENT
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        window.isStatusBarContrastEnforced = false
+                        window.isNavigationBarContrastEnforced = false
+                    }
+                    WindowCompat.getInsetsController(window, view).apply {
+                        isAppearanceLightStatusBars = false
+                        isAppearanceLightNavigationBars = false
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                ) {
+                    dev.merta.app.ui.theme.WallpaperBackground()
+                    Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                     val vm: ChatViewModel = viewModel(
                         factory = object : ViewModelProvider.Factory {
                             @Suppress("UNCHECKED_CAST")
@@ -58,8 +83,9 @@ class MertaActivity : ComponentActivity() {
                             if (intent.getBooleanExtra("open_updates", false)) Route.SETTINGS else Route.CHAT,
                         )
                     }
-                    // Пересоздаёт параметры после выбора модели (поле модели обновляется).
+                    // Пересоздаёт параметры/провайдеры после изменений списков.
                     var settingsTick by remember { mutableStateOf(0) }
+                    var providersTick by remember { mutableStateOf(0) }
 
                     when (route) {
                         Route.CHAT -> ChatScreen(
@@ -72,6 +98,7 @@ class MertaActivity : ComponentActivity() {
                             onNewChat = {
                                 vm.newChat()
                             },
+                            onOpenModels = { route = Route.MODELS },
                         )
                         Route.SETTINGS -> key(settingsTick) {
                             SettingsScreen(
@@ -79,22 +106,44 @@ class MertaActivity : ComponentActivity() {
                                 agentFiles = agentFiles,
                                 workspace = workspace,
                                 onOpenModels = { route = Route.MODELS },
+                                onOpenProviders = { route = Route.PROVIDERS },
                                 onBack = { route = Route.CHAT },
                                 onSaved = { vm.refreshConfig() },
                             )
                         }
                         Route.MODELS -> ModelsScreen(
                             vm = vm,
-                            currentModel = settings.load().model,
-                            onPick = { id ->
-                                val cfg = settings.load()
-                                settings.save(cfg.copy(model = id))
+                            activeProviderId = settings.activeProviderId(),
+                            currentModel = settings.selectedModel(settings.activeProviderId()),
+                            onPick = { pid, mid ->
+                                vm.selectModel(pid, mid)
+                                route = Route.CHAT
+                            },
+                            onBack = { route = Route.CHAT },
+                        )
+                        Route.PROVIDERS -> key(providersTick) {
+                            ProvidersScreen(
+                            providers = settings.loadProviders(),
+                            activeId = settings.activeProviderId(),
+                            onSelect = {
+                                settings.setActiveProvider(it)
                                 vm.refreshConfig()
-                                settingsTick++
-                                route = Route.SETTINGS
+                                providersTick++
+                            },
+                            onAdd = { p ->
+                                settings.saveProviders(settings.loadProviders() + p)
+                                settings.setActiveProvider(p.id)
+                                vm.refreshConfig()
+                                providersTick++
+                            },
+                            onDelete = { id ->
+                                settings.saveProviders(settings.loadProviders().filter { it.id != id })
+                                vm.refreshConfig()
+                                providersTick++
                             },
                             onBack = { route = Route.SETTINGS },
-                        )
+                            )
+                        }
                         Route.SESSIONS -> SessionsScreen(
                             vm,
                             onOpenChat = { route = Route.CHAT },
@@ -104,10 +153,11 @@ class MertaActivity : ComponentActivity() {
                             },
                         )
                     }
-                }
-            }
+                    } // systemBarsPadding
+                } // root (обои)
+            } // MetroTheme
         }
     }
 
-    private enum class Route { CHAT, SETTINGS, MODELS, SESSIONS }
+    private enum class Route { CHAT, SETTINGS, MODELS, SESSIONS, PROVIDERS }
 }

@@ -6,25 +6,35 @@ import androidx.lifecycle.viewModelScope
 import dev.merta.app.data.agent.AgentFiles
 import dev.merta.app.data.chat.SessionStore
 import dev.merta.app.data.llm.LlmException
-import dev.merta.app.data.llm.LlmMessage
 import dev.merta.app.data.llm.LlmModel
-import dev.merta.app.data.llm.LlmRequest
 import dev.merta.app.data.llm.LlmStreamingProvider
 import dev.merta.app.data.llm.OpenAiCompatClient
+import dev.merta.app.data.llm.TurnMessage
 import dev.merta.app.data.settings.MertaSettings
+import dev.merta.app.data.settings.Provider
+import dev.merta.app.data.tools.PendingApproval
+import dev.merta.app.data.tools.ToolRegistry
+import dev.merta.app.data.workspace.FileGatewayImpl
+import dev.merta.app.data.workspace.WorkspaceStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 
+/** Модели одного провайдера для группированного пикера. */
+data class ProviderGroup(val provider: Provider, val models: List<LlmModel>)
+
 /**
- * Чат: стрим Direct API, история сессий, каталог моделей.
+ * Чат: стрим Direct API, история сессий, каталог моделей по провайдерам.
  * Системный промт (`merta/system.md`) подмешивается первым system-сообщением.
- * Персистентность сессий — файлы; остальное состояние — в памяти.
  */
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -34,12 +44,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val streaming: String? = null,
         val sending: Boolean = false,
         val configured: Boolean = false,
-        val modelLabel: String = "",
+        val providerName: String = "",
+        val modelDisplayName: String = "",
+        val effort: String? = null,
         val sessionId: String = "",
         val sessions: List<SessionStore.SessionMeta> = emptyList(),
-        val models: List<LlmModel> = emptyList(),
+        val groups: List<ProviderGroup> = emptyList(),
         val modelsLoading: Boolean = false,
         val modelsError: String? = null,
+        /** Ожидающее подтверждение деструктивного вызова (диалог). */
+        val pendingApproval: PendingApproval? = null,
     )
 
     private val settings = MertaSettings(app)
@@ -51,6 +65,34 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var streamJob: Job? = null
     private var currentTitle = "Новый чат"
     private var nextId = 1L
+    private var approvalGate: CompletableDeferred<Boolean>? = null
+
+    private fun toolRegistry(): ToolRegistry {
+        val app = getApplication<Application>()
+        val files = AgentFiles(app)
+        val store = WorkspaceStore(app, files.workspaceDir.absolutePath)
+        return ToolRegistry(FileGatewayImpl(store), files.workspaceDir.absolutePath)
+    }
+
+    /** Ответ пользователя в диалоге подтверждения инструмента. */
+    fun approveTool(allow: Boolean) {
+        _state.update { it.copy(pendingApproval = null) }
+        approvalGate?.complete(allow)
+        approvalGate = null
+    }
+
+    private suspend fun waitApproval(approval: PendingApproval): Boolean {
+        val gate = CompletableDeferred<Boolean>()
+        approvalGate = gate
+        _state.update { it.copy(pendingApproval = approval) }
+        return try {
+            gate.await()
+        } catch (_: Exception) {
+            false
+        } finally {
+            _state.update { it.copy(pendingApproval = null) }
+        }
+    }
 
     init {
         val id = sessions.newId()
@@ -59,22 +101,46 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         refreshSessions()
     }
 
-    /** Перечитать конфиг (после экрана настроек). */
+    /** Перечитать конфиг (после настроек/пикеров). */
     fun refreshConfig() {
-        val cfg = settings.load()
-        val label = buildString {
-            append(if (cfg.model.isBlank()) "модель не выбрана" else cfg.model)
-            if (!cfg.effort.isNullOrBlank()) append(" · ${cfg.effort}")
+        val provider = settings.activeProvider()
+        val effort = settings.load().effort
+        if (provider == null || !provider.hasKey) {
+            _state.update {
+                it.copy(
+                    configured = false,
+                    providerName = provider?.name ?: "",
+                    modelDisplayName = "",
+                    effort = effort,
+                )
+            }
+        } else {
+            val modelId = settings.selectedModel(provider.id)
+            val label = settings.displayNameFor(provider.id, modelId)
+            _state.update {
+                it.copy(
+                    configured = modelId.isNotBlank(),
+                    providerName = provider.name,
+                    modelDisplayName = label,
+                    effort = effort,
+                )
+            }
         }
-        _state.update { it.copy(configured = cfg.isConfigured, modelLabel = label) }
         if (_state.value.messages.isEmpty()) {
-            val hint = if (cfg.isConfigured) {
-                "Готов. Спроси что-нибудь — отвечу через ${cfg.model}."
+            val s = _state.value
+            val hint = if (s.configured) {
+                "Готов. Спроси что-нибудь — отвечу через ${s.modelDisplayName}."
             } else {
-                "Открой параметры (шестерёнка справа вверху) и введи endpoint, API-ключ и модель."
+                "Открой параметры и добавь провайдера с API-ключом, затем выбери модель."
             }
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, hint))
         }
+    }
+
+    fun setEffort(effort: String?) {
+        val cfg = settings.load()
+        settings.save(cfg.copy(effort = effort))
+        refreshConfig()
     }
 
     // ---------- сессии ----------
@@ -109,22 +175,53 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- модели ----------
 
+    /** Обновить каталог по всем провайдерам с ключами (параллельно), закэшировать имена. */
     fun refreshModels() {
-        val cfg = settings.load()
-        if (cfg.apiKey.isBlank()) {
-            _state.update { it.copy(modelsError = "Сначала введи API-ключ.") }
+        val providers = settings.loadProviders().filter { it.hasKey }
+        if (providers.isEmpty()) {
+            _state.update { it.copy(modelsError = "Ни у одного провайдера нет ключа — добавь в параметрах.") }
             return
         }
         _state.update { it.copy(modelsLoading = true, modelsError = null) }
         viewModelScope.launch {
             try {
-                val list = withContext(Dispatchers.IO) { makeProvider(cfg).listModels() }
-                    .sortedBy { it.displayName.lowercase() }
-                _state.update { it.copy(models = list, modelsLoading = false) }
-            } catch (e: LlmException) {
-                _state.update { it.copy(modelsLoading = false, modelsError = describeError(e)) }
+                val groups = supervisorScope {
+                    providers.map { p ->
+                        async(Dispatchers.IO) {
+                            try {
+                                val list = makeProvider(p).listModels()
+                                    .sortedBy { it.displayName.lowercase() }
+                                ProviderGroup(p, list)
+                            } catch (e: LlmException) {
+                                ProviderGroup(p, emptyList())
+                            }
+                        }
+                    }.awaitAll()
+                }.filter { it.models.isNotEmpty() }
+                // Кэш имён для подписей пузыря без сети.
+                val cache = settings.modelsNamesCache().toMutableMap()
+                for (g in groups) {
+                    cache[g.provider.id] = g.models.associate { it.id to it.displayName }
+                }
+                settings.saveModelsNamesCache(cache)
+                _state.update {
+                    it.copy(
+                        groups = groups,
+                        modelsLoading = false,
+                        modelsError = if (groups.isEmpty()) "Каталог пуст — проверь ключи и сеть." else null,
+                    )
+                }
+                refreshConfig()
+            } catch (e: Exception) {
+                _state.update { it.copy(modelsLoading = false, modelsError = e.message ?: "Ошибка сети.") }
             }
         }
+    }
+
+    fun selectModel(providerId: String, modelId: String) {
+        settings.setActiveProvider(providerId)
+        settings.setSelectedModel(providerId, modelId)
+        refreshConfig()
     }
 
     // ---------- отправка ----------
@@ -132,41 +229,67 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _state.value.sending) return
-        val cfg = settings.load()
-        if (!cfg.isConfigured) {
-            push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Сначала настрой endpoint, ключ и модель в параметрах."))
+        val provider = settings.activeProvider()
+        if (provider == null || !provider.hasKey) {
+            push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Выбери провайдера с ключом и модель — пузырь под заголовком."))
+            return
+        }
+        val modelId = settings.selectedModel(provider.id)
+        if (modelId.isBlank()) {
+            push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Выбери модель — пузырь под заголовком."))
             return
         }
         cancelStream(keepPartial = false)
         push(ChatMessage(nextId(), ChatMessage.Role.USER, trimmed))
 
-        val system = agentFiles.loadSystemPrompt()
-        val history = buildList {
-            if (system.isNotBlank()) add(LlmMessage("system", system))
-            addAll(
-                _state.value.messages
-                    .filter { it.role != ChatMessage.Role.SYSTEM }
-                    .map {
-                        LlmMessage(
-                            role = if (it.role == ChatMessage.Role.USER) "user" else "assistant",
-                            content = it.text,
-                        )
-                    },
-            )
-        }
-        val provider = makeProvider(cfg)
+        // Транскрипт для API: системный промт + пользователь/ассистент
+        // (SYSTEM-строки ленты — только отображение, в запрос не идут).
+        // К системному добавляем динамическую строку с рабочей папкой,
+        // чтобы модель знала абсолютный путь и резолвинг относительных.
+        val wsDir = AgentFiles(getApplication()).workspaceDir.absolutePath
+        val system = agentFiles.loadSystemPrompt() +
+            "\n\nРабочая папка: $wsDir. " +
+            "Относительные пути (hello.txt) резолвятся от неё; " +
+            "абсолютные — только внутри разрешённых папок."
+        val transcript = mutableListOf<TurnMessage>()
+        if (system.isNotBlank()) transcript.add(TurnMessage("system", system))
+        transcript.addAll(
+            _state.value.messages
+                .filter { it.role != ChatMessage.Role.SYSTEM }
+                .map {
+                    TurnMessage(
+                        role = if (it.role == ChatMessage.Role.USER) "user" else "assistant",
+                        content = it.text,
+                    )
+                },
+        )
+        val client = makeProvider(provider) as OpenAiCompatClient
+        val effort = settings.load().effort
+        val registry = toolRegistry()
         _state.update { it.copy(sending = true, streaming = "") }
         streamJob = viewModelScope.launch {
             try {
                 val full = withContext(Dispatchers.IO) {
-                    provider.streamChat(LlmRequest(cfg.model, history, cfg.effort)) { delta ->
-                        _state.update { s -> s.copy(streaming = (s.streaming ?: "") + delta) }
-                    }
+                    client.runAgent(
+                        modelId, transcript, effort, registry,
+                        cb = object : OpenAiCompatClient.AgentCallbacks {
+                            override fun onDelta(text: String) {
+                                _state.update { s -> s.copy(streaming = (s.streaming ?: "") + text) }
+                            }
+
+                            override fun onToolStart(name: String, summary: String) {
+                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "\u2699 " + summary))
+                            }
+
+                            override suspend fun onApproval(approval: PendingApproval): Boolean =
+                                waitApproval(approval)
+                        },
+                    )
                 }
                 _state.update { it.copy(streaming = null, sending = false) }
                 if (full.isNotBlank()) push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, full))
             } catch (e: LlmException) {
-                _state.update { it.copy(streaming = null, sending = false) }
+                _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
@@ -187,13 +310,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun makeProvider(cfg: MertaSettings.LlmConfig): LlmStreamingProvider {
-        val headers = if (cfg.baseUrl.trimEnd('/') == MertaSettings.Presets.OPENROUTER) {
+    fun makeProvider(p: Provider): LlmStreamingProvider {
+        val headers = if (p.baseUrl.trimEnd('/') == MertaSettings.Presets.OPENROUTER) {
             OpenAiCompatClient.openRouterHeaders()
         } else {
             emptyMap()
         }
-        return OpenAiCompatClient(cfg.baseUrl, cfg.apiKey, headers)
+        return OpenAiCompatClient(p.baseUrl, p.apiKey, headers)
     }
 
     private fun persist() {
@@ -209,8 +332,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun describeError(e: LlmException): String = when (e.status) {
-        401 -> "Ошибка 401: неверный API-ключ. Проверь ключ в параметрах."
-        404 -> "Ошибка 404: endpoint или модель не найдены. Проверь URL и имя модели."
+        401 -> "Ошибка 401: неверный API-ключ. Проверь ключ провайдера."
+        404 -> "Ошибка 404: endpoint или модель не найдены."
         429 -> "Ошибка 429: квота/лимит провайдера. Подожди или смени модель."
         -1 -> e.message ?: "Ошибка сети."
         else -> "Ошибка ${e.status}: ${e.message}"

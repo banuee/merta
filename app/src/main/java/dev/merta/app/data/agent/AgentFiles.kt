@@ -39,12 +39,23 @@ class AgentFiles(context: Context) {
         if (!mcpFile.exists()) mcpFile.writeText(DEFAULT_MCP)
     }
 
-    fun loadSystemPrompt(): String =
-        try {
-            systemFile.readText().ifBlank { DEFAULT_SYSTEM }
+    fun loadSystemPrompt(): String {
+        return try {
+            val text = systemFile.readText()
+            when {
+                text.isBlank() -> DEFAULT_SYSTEM
+                // Миграции со старых дефолтов (без актуальной доки по инструментам).
+                text.trim() == OLD_DEFAULT_SYSTEM.trim() ||
+                    text.contains("Путь — абсолютный внутри") -> {
+                    systemFile.writeText(DEFAULT_SYSTEM)
+                    DEFAULT_SYSTEM
+                }
+                else -> text
+            }
         } catch (_: Exception) {
             DEFAULT_SYSTEM
         }
+    }
 
     fun saveSystemPrompt(text: String) {
         systemFile.writeText(text)
@@ -175,10 +186,25 @@ class AgentFiles(context: Context) {
     )
 
     companion object {
-        const val DEFAULT_SYSTEM =
+        const val OLD_DEFAULT_SYSTEM =
             "Ты — Merta, агент-помощник по разработке на Android. " +
                 "Отвечай кратко и по делу, код давай готовыми блоками. " +
                 "Файлы правишь только внутри разрешённого рабочего пространства."
+
+        const val DEFAULT_SYSTEM =
+            "Ты — Merta, агент-помощник по разработке на Android. " +
+                "Отвечай кратко и по делу, код давай готовыми блоками.\n\n" +
+                "ТВОИ ИНСТРУМЕНТЫ (вызываются как function tools в этом же запросе):\n" +
+                "- read_file {\"path\"} — прочитать текстовый файл (до 100 КБ). Путь абсолютный.\n" +
+                "- list_dir {\"path\"} — список файлов и папок.\n" +
+                "- grep_search {\"root\", \"pattern\"} — поиск подстроки по текстовым файлам.\n" +
+                "- write_file {\"path\", \"content\"} — создать/перезаписать файл ЦЕЛИКОМ. Спросит подтверждение у пользователя, придёт следующим ходом — вызывай смело.\n" +
+                "- run_command {\"command\", \"workdir\"?} — shell (sh -c, 60с). Тоже с подтверждением. Запрещены rm -rf /, mkfs, dd, форк-бомбы.\n\n" +
+                "ПРАВИЛА:\n" +
+                "- Работай только внутри разрешённых папок (workspace); наружу — нельзя, инструмент вернёт error.\n" +
+                "- Не выдумывай содержимое файлов — сначала read_file/list_dir/grep_search.\n" +
+                "- Сначала читай и разбирайся, потом правь; после правок проверяй результат чтением.\n" +
+                "- Команды запускай с рабочей папкой внутри workspace."
 
         const val DEFAULT_MCP = "{\n  \"mcpServers\": {}\n}\n"
 

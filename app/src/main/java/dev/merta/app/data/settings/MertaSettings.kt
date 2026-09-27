@@ -89,6 +89,88 @@ class MertaSettings(context: Context) {
             .apply()
     }
 
+    // ---------- провайдеры ----------
+
+    /**
+     * Список провайдеров. Первый запуск: миграция со старого одиночного конфига
+     * (endpoint/ключ) либо сиды OpenRouter + Zen с пустыми ключами.
+     */
+    fun loadProviders(): List<Provider> {
+        val raw = prefs.getString(KEY_PROVIDERS, null)
+        if (raw != null) return ProviderJson.providersFromJson(raw)
+        val legacyUrl = prefs.getString(KEY_BASE_URL, "") ?: ""
+        val legacyKey = prefs.getString(KEY_API_KEY, "") ?: ""
+        val seeded = when {
+            legacyUrl.isNotBlank() -> listOf(
+                Provider(
+                    id = slugFor(legacyUrl),
+                    name = nameFor(legacyUrl),
+                    baseUrl = legacyUrl.trim().trimEnd('/'),
+                    apiKey = legacyKey,
+                ),
+            )
+            else -> listOf(
+                Provider("openrouter", "OpenRouter", Presets.OPENROUTER, ""),
+                Provider("zen", "Zen", Presets.ZEN, ""),
+            )
+        }
+        saveProviders(seeded)
+        prefs.edit().putString(KEY_ACTIVE_PROVIDER, seeded.first().id).apply()
+        return seeded
+    }
+
+    fun saveProviders(providers: List<Provider>) {
+        prefs.edit().putString(KEY_PROVIDERS, ProviderJson.providersToJson(providers)).apply()
+        val active = activeProviderId()
+        if (providers.none { it.id == active } && providers.isNotEmpty()) {
+            setActiveProvider(providers.first().id)
+        }
+    }
+
+    fun activeProviderId(): String {
+        val stored = prefs.getString(KEY_ACTIVE_PROVIDER, null)
+        val list = loadProviders()
+        return if (list.any { it.id == stored }) stored!! else list.firstOrNull()?.id ?: "openrouter"
+    }
+
+    fun setActiveProvider(id: String) {
+        prefs.edit().putString(KEY_ACTIVE_PROVIDER, id).apply()
+    }
+
+    fun activeProvider(): Provider? {
+        val id = activeProviderId()
+        return loadProviders().find { it.id == id }
+    }
+
+    /** Выбранная модель провайдера (фолбэк — старый одиночный model / дефолт пресетов). */
+    fun selectedModel(providerId: String): String {
+        val sel = ProviderJson.modelsCacheFromJson(prefs.getString(KEY_SELECTED, "{}") ?: "{}")
+        sel[providerId]?.keys?.firstOrNull()?.let { return it }
+        val legacy = prefs.getString(KEY_MODEL, "") ?: ""
+        if (legacy.isNotBlank()) return legacy
+        val provider = loadProviders().find { it.id == providerId }
+        return Presets.defaultModelFor(provider?.baseUrl ?: "")
+    }
+
+    fun setSelectedModel(providerId: String, modelId: String) {
+        val sel = ProviderJson.modelsCacheFromJson(prefs.getString(KEY_SELECTED, "{}") ?: "{}").toMutableMap()
+        sel[providerId] = mapOf(modelId to "")
+        prefs.edit().putString(KEY_SELECTED, ProviderJson.modelsCacheToJson(sel)).apply()
+    }
+
+    /** Кэш имён моделей (providerId -> modelId -> displayName) для подписей без сети. */
+    fun modelsNamesCache(): Map<String, Map<String, String>> =
+        ProviderJson.modelsCacheFromJson(prefs.getString(KEY_MODELS, "{}") ?: "{}")
+
+    fun saveModelsNamesCache(cache: Map<String, Map<String, String>>) {
+        prefs.edit().putString(KEY_MODELS, ProviderJson.modelsCacheToJson(cache)).apply()
+    }
+
+    fun displayNameFor(providerId: String, modelId: String): String {
+        val name = modelsNamesCache()[providerId]?.get(modelId)
+        return if (name.isNullOrBlank()) modelId else name
+    }
+
     companion object {
         private const val KEY_BASE_URL = "llm_base_url"
         private const val KEY_API_KEY = "llm_api_key"
@@ -96,5 +178,26 @@ class MertaSettings(context: Context) {
         private const val KEY_EFFORT = "llm_effort"
         private const val KEY_UPDATE_INTERVAL = "update_interval_minutes"
         private const val KEY_LAST_NOTIFIED = "update_last_notified"
+        private const val KEY_PROVIDERS = "llm_providers"
+        private const val KEY_ACTIVE_PROVIDER = "llm_active_provider"
+        private const val KEY_MODELS = "llm_models_cache"
+        private const val KEY_SELECTED = "llm_selected_models"
+
+        private fun slugFor(baseUrl: String): String {
+            val u = baseUrl.trimEnd('/').lowercase()
+            return when {
+                "openrouter" in u -> "openrouter"
+                "opencode" in u || "/zen" in u -> "zen"
+                "127.0.0.1" in u || "localhost" in u -> "local"
+                else -> "custom"
+            }
+        }
+
+        private fun nameFor(baseUrl: String): String = when (slugFor(baseUrl)) {
+            "openrouter" -> "OpenRouter"
+            "zen" -> "Zen"
+            "local" -> "Local"
+            else -> "Custom"
+        }
     }
 }

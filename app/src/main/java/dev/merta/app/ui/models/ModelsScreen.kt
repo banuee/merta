@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.merta.app.ui.chat.ChatViewModel
+import dev.merta.app.ui.chat.ProviderGroup
 import dev.merta.app.ui.sessions.MetroSmallButton
 import dev.merta.app.ui.theme.LocalMetroScheme
 import dev.merta.app.ui.theme.MetroDimens
@@ -41,14 +42,18 @@ import dev.merta.app.ui.theme.MetroFonts
 import dev.merta.app.ui.theme.metroClickable
 
 /**
- * Каталог моделей провайдера: обновление, поиск, выбор.
- * Выбор сразу сохраняется в конфиг (модель подхватывает чат).
+ * Каталог моделей по провайдерам:
+ *   Провайдер
+ *     Модель (имя сверху, id снизу)
+ *     Модель
+ * Выбор сразу делает провайдера активным и возвращается в чат.
  */
 @Composable
 fun ModelsScreen(
     vm: ChatViewModel,
+    activeProviderId: String,
     currentModel: String,
-    onPick: (String) -> Unit,
+    onPick: (providerId: String, modelId: String) -> Unit,
     onBack: () -> Unit,
 ) {
     val scheme = LocalMetroScheme.current
@@ -56,50 +61,48 @@ fun ModelsScreen(
     var filter by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        if (ui.models.isEmpty() && ui.modelsError == null) vm.refreshModels()
+        if (ui.groups.isEmpty() && ui.modelsError == null) vm.refreshModels()
     }
 
-    val shown = remember(ui.models, filter) {
+    val shown: List<ProviderGroup> = remember(ui.groups, filter) {
         val f = filter.trim().lowercase()
-        if (f.isEmpty()) ui.models
-        else ui.models.filter { it.id.lowercase().contains(f) || it.displayName.lowercase().contains(f) }
+        if (f.isEmpty()) return@remember ui.groups
+        ui.groups.mapNotNull { g ->
+            val hit = g.models.filter {
+                it.id.lowercase().contains(f) || it.displayName.lowercase().contains(f)
+            }
+            if (hit.isEmpty() && !g.provider.name.lowercase().contains(f)) null
+            else ProviderGroup(g.provider, hit)
+        }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
             .padding(horizontal = 12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(scheme.accent),
-        )
         Row(
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             modifier = Modifier.padding(top = 10.dp, bottom = 12.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .width(26.dp)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(1.5.dp))
-                    .background(scheme.accent),
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = "МОДЕЛИ",
-                fontFamily = MetroFonts.headline,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 20.sp,
-                letterSpacing = 2.sp,
-                color = scheme.text,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "МОДЕЛИ",
+                    fontFamily = MetroFonts.headline,
+                    fontWeight = FontWeight.Light,
+                    fontSize = 24.sp,
+                    letterSpacing = 2.sp,
+                    color = scheme.text,
+                )
+                Spacer(Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .width(26.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(1.5.dp))
+                        .background(scheme.accent),
+                )
+            }
             MetroSmallButton("⟳") { vm.refreshModels() }
             Spacer(Modifier.width(8.dp))
             MetroSmallButton("×", onClick = onBack)
@@ -132,30 +135,49 @@ fun ModelsScreen(
             ui.modelsLoading -> Text("Загружаю каталог…", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.textDim)
             ui.modelsError != null -> Text(ui.modelsError!!, fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.textDim)
             shown.isEmpty() -> Text(
-                if (ui.models.isEmpty()) "Каталог пуст — обнови кнопкой ⟳." else "Ничего не найдено.",
+                if (ui.groups.isEmpty()) "Каталог пуст — обнови кнопкой ⟳." else "Ничего не найдено.",
                 fontFamily = MetroFonts.text,
                 fontSize = 14.sp,
                 color = scheme.textDim,
             )
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(shown, key = { it.id }) { m ->
-                    val selected = m.id == currentModel
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(MetroDimens.radius))
-                            .background(if (selected) scheme.accent.copy(alpha = 0.22f) else scheme.glass)
-                            .border(
-                                1.dp,
-                                if (selected) scheme.accent.copy(alpha = 0.45f) else scheme.stroke,
-                                RoundedCornerShape(MetroDimens.radius),
-                            )
-                            .metroClickable(targetScale = 0.97f) { onPick(m.id) }
-                            .padding(12.dp),
-                    ) {
-                        Text(m.id, fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
-                        if (m.name.isNotBlank() && m.name != m.id) {
-                            Text(m.displayName, fontFamily = MetroFonts.text, fontSize = 12.sp, color = scheme.textDim)
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (g in shown) {
+                    item(key = "p-${g.provider.id}") {
+                        Text(
+                            text = g.provider.name.uppercase(),
+                            fontFamily = MetroFonts.text,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            letterSpacing = 1.5.sp,
+                            color = scheme.accent,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    items(g.models, key = { "m-${g.provider.id}-${it.id}" }) { m ->
+                        val selected = g.provider.id == activeProviderId && m.id == currentModel
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(MetroDimens.radius))
+                                .background(if (selected) scheme.accent.copy(alpha = 0.22f) else scheme.glass)
+                                .border(
+                                    1.dp,
+                                    if (selected) scheme.accent.copy(alpha = 0.45f) else scheme.stroke,
+                                    RoundedCornerShape(MetroDimens.radius),
+                                )
+                                .metroClickable(targetScale = 0.97f) { onPick(g.provider.id, m.id) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .animateItem(),
+                        ) {
+                            Text(m.displayName, fontFamily = MetroFonts.text, fontSize = 15.sp, color = scheme.text)
+                            if (m.displayName != m.id) {
+                                Text(
+                                    m.id,
+                                    fontFamily = MetroFonts.text,
+                                    fontSize = 12.sp,
+                                    color = scheme.textDim,
+                                )
+                            }
                         }
                     }
                 }

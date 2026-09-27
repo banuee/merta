@@ -36,7 +36,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,8 +50,8 @@ import dev.merta.app.ui.theme.metroClickable
 import kotlinx.coroutines.launch
 
 /**
- * Параметры: провайдер, модель + effort, агент (system.md, skills, mcp),
- * рабочая папка (скоупы FileGateway). Ключ — только в шифрованном хранилище.
+ * Параметры: провайдер, агент (system.md, skills, mcp), рабочая папка, обновления.
+ * Ключи провайдеров — только в шифрованном хранилище, правятся на экране провайдеров.
  */
 @Composable
 fun SettingsScreen(
@@ -60,6 +59,7 @@ fun SettingsScreen(
     agentFiles: AgentFiles,
     workspace: WorkspaceStore,
     onOpenModels: () -> Unit,
+    onOpenProviders: () -> Unit,
     onBack: () -> Unit,
     onSaved: () -> Unit,
 ) {
@@ -67,14 +67,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val initial = remember { settings.load() }
-    var baseUrl by remember { mutableStateOf(initial.baseUrl) }
-    var apiKey by remember { mutableStateOf(initial.apiKey) }
-    var model by remember { mutableStateOf(initial.model) }
-    var effort by remember { mutableStateOf(initial.effort) }
     var systemPrompt by remember { mutableStateOf(agentFiles.loadSystemPrompt()) }
     val agentStatus = remember { agentFiles.status() }
     val ws by workspace.scopeFlow.collectAsState(initial = null)
+    val activeProvider = remember { settings.activeProvider() }
 
     val safLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -88,14 +84,7 @@ fun SettingsScreen(
         scope.launch { workspace.addRoot(uri.toString()) }
     }
 
-    fun pickPreset(url: String) {
-        baseUrl = url
-        val def = MertaSettings.Presets.defaultModelFor(url)
-        if (model.isBlank() && def.isNotBlank()) model = def
-    }
-
     fun save() {
-        settings.save(MertaSettings.LlmConfig(baseUrl, apiKey, model, effort))
         agentFiles.saveSystemPrompt(systemPrompt)
         onSaved()
     }
@@ -103,83 +92,86 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(scheme.accent),
-        )
         Row(
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             modifier = Modifier.padding(top = 10.dp, bottom = 12.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .width(26.dp)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(1.5.dp))
-                    .background(scheme.accent),
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = "ПАРАМЕТРЫ",
-                fontFamily = MetroFonts.headline,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 20.sp,
-                letterSpacing = 2.sp,
-                color = scheme.text,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "ПАРАМЕТРЫ",
+                    fontFamily = MetroFonts.headline,
+                    fontWeight = FontWeight.Light,
+                    fontSize = 24.sp,
+                    letterSpacing = 2.sp,
+                    color = scheme.text,
+                )
+                Spacer(Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .width(26.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(1.5.dp))
+                        .background(scheme.accent),
+                )
+            }
             MetroSmallButton("×", onClick = onBack)
         }
 
-        SectionLabel("ENDPOINT")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PresetChip("OpenRouter", baseUrl == MertaSettings.Presets.OPENROUTER) {
-                pickPreset(MertaSettings.Presets.OPENROUTER)
-            }
-            PresetChip("Zen", baseUrl == MertaSettings.Presets.ZEN) {
-                pickPreset(MertaSettings.Presets.ZEN)
+        SectionLabel("ПРОВАЙДЕР")
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(MetroDimens.radius))
+                .background(scheme.glass)
+                .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radius))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                activeProvider?.name ?: "не выбран",
+                fontFamily = MetroFonts.text,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                color = scheme.text,
+            )
+            Text(
+                (activeProvider?.baseUrl ?: "") + " · " +
+                    if (activeProvider?.hasKey == true) "ключ введён" else "без ключа",
+                fontFamily = MetroFonts.text,
+                fontSize = 12.sp,
+                color = scheme.textDim,
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(scheme.glassHover)
+                        .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                        .metroClickable(targetScale = 0.97f, onClick = onOpenModels)
+                        .padding(vertical = 10.dp),
+                ) {
+                    Text("Модели", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(scheme.glassHover)
+                        .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                        .metroClickable(targetScale = 0.97f, onClick = onOpenProviders)
+                        .padding(vertical = 10.dp),
+                ) {
+                    Text("Провайдеры", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
+                }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        MetroField(value = baseUrl, onChange = { baseUrl = it }, hint = "https://…/v1")
-
-        Spacer(Modifier.height(12.dp))
-        SectionLabel("API-КЛЮЧ")
-        MetroField(value = apiKey, onChange = { apiKey = it }, hint = "sk-or-… / zen-…", secret = true)
-
-        Spacer(Modifier.height(12.dp))
-        SectionLabel("МОДЕЛЬ")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
-                MetroField(value = model, onChange = { model = it }, hint = "например mimo-v2.5-free")
-            }
-            Spacer(Modifier.width(8.dp))
-            MetroSmallButton("≣", onClick = onOpenModels)
-        }
-
-        Spacer(Modifier.height(12.dp))
-        SectionLabel("EFFORT (REASONING)")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PresetChip("Выкл", effort == null) { effort = null }
-            for (e in MertaSettings.Efforts.ALL) {
-                PresetChip(e, effort == e) { effort = e }
-            }
-        }
-        Text(
-            "Effort поддерживается OpenRouter-моделями; для Zen оставь «Выкл».",
-            fontFamily = MetroFonts.text,
-            fontSize = 12.sp,
-            color = scheme.textDim,
-            modifier = Modifier.padding(top = 4.dp),
-        )
 
         Spacer(Modifier.height(16.dp))
         SectionLabel("АГЕНТ")
@@ -282,7 +274,7 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "Ключ хранится только в шифрованном хранилище телефона.",
+            "Ключи провайдеров хранятся только в шифрованном хранилище телефона.",
             fontFamily = MetroFonts.text,
             fontSize = 12.sp,
             color = scheme.textDim,
@@ -311,28 +303,10 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun PresetChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val scheme = LocalMetroScheme.current
-    val border = if (selected) scheme.accent else scheme.stroke
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
-            .background(if (selected) scheme.accent.copy(alpha = 0.22f) else scheme.glass)
-            .border(1.dp, border, RoundedCornerShape(MetroDimens.radiusSmall))
-            .metroClickable(targetScale = 0.93f, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-    ) {
-        Text(label, fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
-    }
-}
-
-@Composable
 private fun MetroField(
     value: String,
     onChange: (String) -> Unit,
     hint: String,
-    secret: Boolean = false,
     minLines: Int = 1,
 ) {
     val scheme = LocalMetroScheme.current
@@ -349,7 +323,7 @@ private fun MetroField(
             onValueChange = onChange,
             textStyle = TextStyle(fontFamily = MetroFonts.text, fontSize = 15.sp, color = scheme.text),
             cursorBrush = SolidColor(scheme.accent),
-            visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+            visualTransformation = VisualTransformation.None,
             singleLine = minLines == 1,
             minLines = minLines,
             modifier = Modifier.fillMaxWidth(),

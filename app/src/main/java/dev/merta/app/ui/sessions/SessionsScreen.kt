@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.merta.app.ui.chat.ChatViewModel
+import dev.merta.app.ui.chat.HeaderIcon
 import dev.merta.app.ui.theme.LocalMetroScheme
 import dev.merta.app.ui.theme.MetroDimens
 import dev.merta.app.ui.theme.MetroFonts
@@ -45,39 +46,32 @@ fun SessionsScreen(vm: ChatViewModel, onOpenChat: () -> Unit, onNewChat: () -> U
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color.Transparent)
             .padding(horizontal = 12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(scheme.accent),
-        )
         Row(
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             modifier = Modifier.padding(top = 10.dp, bottom = 12.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .width(26.dp)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(1.5.dp))
-                    .background(scheme.accent),
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = "ЧАТЫ",
-                fontFamily = MetroFonts.headline,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 20.sp,
-                letterSpacing = 2.sp,
-                color = scheme.text,
-                modifier = Modifier.weight(1f),
-            )
-            MetroSmallButton("+", onClick = onNewChat)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "ЧАТЫ",
+                    fontFamily = MetroFonts.headline,
+                    fontWeight = FontWeight.Light,
+                    fontSize = 24.sp,
+                    letterSpacing = 2.sp,
+                    color = scheme.text,
+                )
+                Spacer(Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .width(26.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(1.5.dp))
+                        .background(scheme.accent),
+                )
+            }
+            HeaderIcon(glyph = "\uF067", onClick = onNewChat)
             Spacer(Modifier.width(8.dp))
             MetroSmallButton("×", onClick = onOpenChat)
         }

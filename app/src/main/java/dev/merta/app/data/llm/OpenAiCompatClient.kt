@@ -6,6 +6,10 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import dev.merta.app.data.tools.PendingApproval
+import dev.merta.app.data.tools.ToolCall
+import dev.merta.app.data.tools.ToolDefs
+import dev.merta.app.data.tools.ToolRegistry
 
 /**
  * OpenAI-совместимый клиент: OpenRouter (`https://openrouter.ai/api/v1`),
@@ -70,6 +74,167 @@ class OpenAiCompatClient(
     /** Отмена активного стрима (новый вопрос, выход). */
     fun cancel() {
         currentCall?.cancel()
+    }
+
+    /** Колбэки агентного цикла (UI решает approve, показывает прогресс). */
+    interface AgentCallbacks {
+        fun onDelta(text: String)
+        fun onToolStart(name: String, summary: String)
+        suspend fun onApproval(approval: PendingApproval): Boolean
+    }
+
+    /**
+     * Агентный цикл: ходы с tools, сборка tool_calls из SSE-фрагментов,
+     * выполнение через [registry] (approve — через колбэк), возврат финального текста.
+     * Текстовые дельты всех ходов стримятся через onDelta.
+     */
+    suspend fun runAgent(
+        model: String,
+        transcript: MutableList<TurnMessage>,
+        effort: String?,
+        registry: ToolRegistry,
+        maxTurns: Int = 8,
+        cb: AgentCallbacks,
+    ): String {
+        val totalText = StringBuilder()
+        repeat(maxTurns) {
+            val turn = postAgentTurn(model, transcript, effort, cb::onDelta)
+            if (turn.text.isNotBlank()) {
+                totalText.append(turn.text)
+            }
+            if (turn.toolCalls.isEmpty()) {
+                if (turn.text.isNotBlank()) {
+                    transcript.add(TurnMessage("assistant", turn.text))
+                }
+                return totalText.toString()
+            }
+            transcript.add(TurnMessage("assistant", turn.text, turn.toolCalls))
+            for (tc in turn.toolCalls) {
+                val def = ToolDefs.byName(tc.name)
+                val args = parseArgs(tc.argumentsJson, def?.params?.map { it.first } ?: emptyList())
+                cb.onToolStart(tc.name, ToolRegistry.summary(dev.merta.app.data.tools.ToolCall(tc.id, tc.name, args)))
+                val output = registry.execute(
+                    ToolCall(tc.id, tc.name, args),
+                ) { approval -> cb.onApproval(approval) }
+                transcript.add(TurnMessage("tool", output, toolCallId = tc.id))
+            }
+        }
+        return totalText.toString()
+    }
+
+    private data class AgentTurn(val text: String, val toolCalls: List<OutToolCall>)
+
+    private fun postAgentTurn(
+        model: String,
+        transcript: List<TurnMessage>,
+        effort: String?,
+        onDelta: (String) -> Unit,
+    ): AgentTurn {
+        val url = baseUrl.trimEnd('/') + "/chat/completions"
+        val body = buildAgentBody(model, transcript, effort)
+        val reqBuilder = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+        for ((k, v) in extraHeaders) reqBuilder.header(k, v)
+        val call = http.newCall(reqBuilder.post(body.toRequestBody(JSON)).build())
+        currentCall = call
+        try {
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val errBody = try {
+                        resp.body?.string()
+                    } catch (_: IOException) {
+                        null
+                    } ?: ""
+                    val msg = SseParser.extractErrorMessage(errBody)
+                        ?: errBody.take(300).ifBlank { resp.message }
+                    throw LlmException(resp.code, msg)
+                }
+                val reader = resp.body?.charStream()?.buffered()
+                    ?: throw LlmException(-1, "пустое тело ответа")
+                val full = StringBuilder()
+                val frags = mutableMapOf<Int, FragAcc>()
+                reader.forEachLine { line ->
+                    if (!line.startsWith("data:")) return@forEachLine
+                    val payload = line.removePrefix("data:").trimStart()
+                    if (SseParser.isDone(payload)) return@forEachLine
+                    val delta = SseParser.extractDelta(payload)
+                    if (!delta.isNullOrEmpty()) {
+                        full.append(delta)
+                        onDelta(delta)
+                    }
+                    for (frag in ToolCallsJson.extractFrags(payload)) {
+                        val acc = frags.getOrPut(frag.index) { FragAcc() }
+                        if (frag.id != null) acc.id = frag.id
+                        if (frag.name != null) acc.name = frag.name
+                        if (frag.argsFrag != null) acc.args.append(frag.argsFrag)
+                    }
+                }
+                val calls = frags.entries.sortedBy { it.key }.mapNotNull { (idx, acc) ->
+                    if (acc.name.isNullOrBlank()) return@mapNotNull null
+                    OutToolCall(acc.id ?: "call-$idx", acc.name!!, acc.args.toString())
+                }
+                return AgentTurn(full.toString(), calls)
+            }
+        } catch (e: IOException) {
+            if (call.isCanceled()) throw LlmException(-2, "отменено")
+            throw LlmException(-1, "сеть: ${e.message}")
+        } finally {
+            if (currentCall === call) currentCall = null
+        }
+    }
+
+    private data class FragAcc(
+        var id: String? = null,
+        var name: String? = null,
+        val args: StringBuilder = StringBuilder(),
+    )
+
+    private fun parseArgs(argsJson: String, keys: List<String>): Map<String, String> {
+        if (argsJson.isBlank()) return emptyMap()
+        val out = mutableMapOf<String, String>()
+        for (k in keys) {
+            SseParser.extractStringAfterKey(argsJson, k, 0)?.let { out[k] = it }
+        }
+        return out
+    }
+
+    private fun buildAgentBody(model: String, transcript: List<TurnMessage>, effort: String?): String {
+        val sb = StringBuilder()
+        sb.append("{\"model\":\"").append(SseParser.jsonEscape(model)).append('"')
+        sb.append(",\"stream\":true")
+        if (!effort.isNullOrBlank()) {
+            sb.append(",\"reasoning\":{\"effort\":\"").append(SseParser.jsonEscape(effort)).append("\"}")
+        }
+        sb.append(",\"tools\":").append(ToolDefs.toolsJson())
+        sb.append(",\"messages\":[")
+        transcript.forEachIndexed { i, m ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"role\":\"").append(m.role).append('"')
+            if (m.role == "assistant" && m.toolCalls.isNotEmpty()) {
+                sb.append(",\"content\":")
+                if (m.content.isBlank()) sb.append("null") else sb.append('"').append(SseParser.jsonEscape(m.content)).append('"')
+                sb.append(",\"tool_calls\":[")
+                m.toolCalls.forEachIndexed { j, tc ->
+                    if (j > 0) sb.append(',')
+                    sb.append("{\"id\":\"").append(SseParser.jsonEscape(tc.id)).append('"')
+                        .append(",\"type\":\"function\",\"function\":{\"name\":\"")
+                        .append(SseParser.jsonEscape(tc.name)).append("\",\"arguments\":\"")
+                        .append(SseParser.jsonEscape(tc.argumentsJson)).append("\"}}")
+                }
+                sb.append(']')
+            } else {
+                sb.append(",\"content\":\"").append(SseParser.jsonEscape(m.content)).append('"')
+                if (m.role == "tool" && m.toolCallId != null) {
+                    sb.append(",\"tool_call_id\":\"").append(SseParser.jsonEscape(m.toolCallId)).append('"')
+                }
+            }
+            sb.append('}')
+        }
+        sb.append("]}")
+        return sb.toString()
     }
 
     private fun postStream(
