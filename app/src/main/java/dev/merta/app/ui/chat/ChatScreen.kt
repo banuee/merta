@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -86,6 +87,7 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .padding(horizontal = 12.dp),
     ) {
         Row(
@@ -311,7 +313,8 @@ private fun EffortRow(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ThoughtRow(thought: ThoughtData, modifier: Modifier = Modifier) {
     val scheme = LocalMetroScheme.current
-    var expanded by remember(thought.startedMs) { mutableStateOf(thought.active) }
+    // По завершении (active true→false) сворачиваем — длинное reasoning не распирает ленту.
+    var expanded by remember(thought.startedMs, thought.active) { mutableStateOf(thought.active) }
     // Последняя строка reasoning — живой индикатор; шаги — фолбэк.
     val lastReasonLine = remember(thought.reasoning) {
         thought.reasoning.lineSequence().lastOrNull { it.isNotBlank() }?.trim()?.take(120)

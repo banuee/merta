@@ -24,43 +24,53 @@ object SseParser {
     /**
      * Вытаскивает кусок размышлений модели из одного чанка:
      * - `choices[0].delta.reasoning` (строка — DeepSeek-R1 style через OpenRouter),
+     * - `choices[0].delta.reasoning_content` (строка — DeepSeek-нативный стиль),
      * - `choices[0].delta.reasoning_details[]` (объекты `reasoning.text` → `text`,
      *   `reasoning.summary` → `summary`).
+     *
+     * OpenRouter дублирует один и тот же текст сразу в `reasoning` и в
+     * `reasoning_details[].text` одного чанка — точные дубли внутри чанка
+     * выкидываются, порядок — по позиции в документе.
      * @return склеенный кусок или null, если чанк без размышлений.
      */
     fun extractReasoning(chunkJson: String): String? {
         val deltaIdx = chunkJson.indexOf("\"delta\"")
         if (deltaIdx < 0) return null
-        val out = StringBuilder()
-        // Прямое строковое поле reasoning (indexOf с кавычками не цепляет reasoning_details).
-        extractStringAfterKey(chunkJson, "reasoning", deltaIdx)?.let {
-            if (it.isNotEmpty()) out.append(it)
+        // (позиция, текст) — сортировка чинит порядок text/summary.
+        // Поиск с кавычками точный: "reasoning" не матчит "reasoning_details".
+        val pieces = mutableListOf<Pair<Int, String>>()
+        for (key in arrayOf("reasoning", "reasoning_content")) {
+            val kIdx = chunkJson.indexOf("\"$key\"", deltaIdx)
+            if (kIdx >= 0) {
+                extractStringAfterKey(chunkJson, key, kIdx)?.let {
+                    if (it.isNotEmpty()) pieces.add(kIdx to it)
+                }
+            }
         }
-        // reasoning_details: собираем text/summary всех объектов массива.
         var rdIdx = chunkJson.indexOf("\"reasoning_details\"", deltaIdx)
         while (rdIdx >= 0) {
             val arrStart = chunkJson.indexOf('[', rdIdx)
             val arrEnd = if (arrStart < 0) null else matchSquare(chunkJson, arrStart)
             if (arrEnd == null) break
-            var i = arrStart
-            while (true) {
-                val tIdx = chunkJson.indexOf("\"text\"", i)
-                if (tIdx < 0 || tIdx >= arrEnd) break
-                extractStringAfterKey(chunkJson, "text", i)?.let {
-                    if (it.isNotEmpty()) out.append(it)
+            for (key in arrayOf("text", "summary")) {
+                var i = arrStart
+                while (true) {
+                    val tIdx = chunkJson.indexOf("\"$key\"", i)
+                    if (tIdx < 0 || tIdx >= arrEnd) break
+                    extractStringAfterKey(chunkJson, key, i)?.let {
+                        if (it.isNotEmpty()) pieces.add(tIdx to it)
+                    }
+                    i = tIdx + key.length + 2
                 }
-                i = tIdx + 6
-            }
-            var j = arrStart
-            while (true) {
-                val sIdx = chunkJson.indexOf("\"summary\"", j)
-                if (sIdx < 0 || sIdx >= arrEnd) break
-                extractStringAfterKey(chunkJson, "summary", j)?.let {
-                    if (it.isNotEmpty()) out.append(it)
-                }
-                j = sIdx + 9
             }
             rdIdx = chunkJson.indexOf("\"reasoning_details\"", arrEnd)
+        }
+        if (pieces.isEmpty()) return null
+        // Порядок по позиции + выкидываем точные дубли чанка (OpenRouter-дубль).
+        val out = StringBuilder()
+        val seen = mutableSetOf<String>()
+        for ((_, text) in pieces.sortedBy { it.first }) {
+            if (seen.add(text)) out.append(text)
         }
         return out.toString().takeIf { it.isNotEmpty() }
     }

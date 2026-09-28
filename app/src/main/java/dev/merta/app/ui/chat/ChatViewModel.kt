@@ -266,6 +266,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         transcript.addAll(
             _state.value.messages
                 .filter { it.role == ChatMessage.Role.USER || it.role == ChatMessage.Role.ASSISTANT }
+                // Хвост истории: без усечения длинные сессии раздувают тело и ловят 400/лимиты.
+                .takeLast(MAX_HISTORY)
                 .map {
                     TurnMessage(
                         role = if (it.role == ChatMessage.Role.USER) "user" else "assistant",
@@ -434,5 +436,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Хвост reasoning, хранимый в Thought (память + JSON истории). */
         const val MAX_THOUGHT_CHARS = 4000
+
+        /** Хвост переписки, уходящий в запрос (старое отрезаем). */
+        const val MAX_HISTORY = 40
     }
 }

@@ -71,6 +71,25 @@ class SseParserTest {
     }
 
     @Test
+    fun `dedupes openrouter double reasoning`() {
+        // OpenRouter шлёт один текст и в reasoning, и в reasoning_details.
+        val chunk = """{"choices":[{"delta":{"reasoning":"think","reasoning_details":[{"type":"reasoning.text","text":"think"}]}}]}"""
+        assertEquals("think", SseParser.extractReasoning(chunk))
+    }
+
+    @Test
+    fun `extracts reasoning_content style`() {
+        val chunk = """{"choices":[{"delta":{"reasoning_content":"deep"}}]}"""
+        assertEquals("deep", SseParser.extractReasoning(chunk))
+    }
+
+    @Test
+    fun `keeps distinct details in document order`() {
+        val chunk = """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"S"},{"type":"reasoning.text","text":"T"}]}}]}"""
+        assertEquals("ST", SseParser.extractReasoning(chunk))
+    }
+
+    @Test
     fun `returns null when no reasoning`() {
         assertNull(SseParser.extractReasoning("""{"choices":[{"delta":{"content":"Hi"}}]}"""))
         assertNull(SseParser.extractReasoning("""{"choices":[]}"""))

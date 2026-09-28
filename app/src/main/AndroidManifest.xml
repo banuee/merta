@@ -9,7 +9,10 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:theme="@style/Theme.App" android:label="Merta">
-        <activity android:name=".MertaActivity" android:exported="true">
+        <activity
+            android:name=".MertaActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

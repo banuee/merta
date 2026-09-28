@@ -90,15 +90,22 @@ class ToolRegistry(
         val base = resolvePath(root).ifBlank { defaultWorkdir }
         safError(base)?.let { return it }
         gateway.check(base, write = false)?.let { return "error: $it" }
+        // Скоуп — один раз: deny-паттерны (.git/, *.env и т.п.) проверяем
+        // на КАЖДОМ файле/папке, иначе поиск светит запрещённое модели.
+        val scope = gateway.currentScope()
+        fun denied(path: String): Boolean =
+            dev.merta.app.data.workspace.GatewayRules.checkAccess(scope, path, false) != null
         val hits = mutableListOf<String>()
         var scanned = 0
         File(base).walkTopDown()
-            .onEnter { dir ->
-                gatewayAllowsSync(dir.absolutePath)
-            }
+            .onEnter { dir -> !denied(dir.absolutePath) }
             .forEach { f ->
-                if (hits.size >= MAX_HITS || scanned >= MAX_SCAN) return@forEach
+                // Лимиты останавливают обход, а не пропускают файлы.
+                if (hits.size >= MAX_HITS || scanned >= MAX_SCAN) {
+                    return hits.joinToString("\n").ifBlank { "(совпадений нет)" }
+                }
                 if (!f.isFile || f.length() > MAX_GREP_FILE) return@forEach
+                if (denied(f.absolutePath)) return@forEach
                 if (isBinary(f)) return@forEach
                 scanned++
                 try {
@@ -117,10 +124,6 @@ class ToolRegistry(
             }
         return if (hits.isEmpty()) "(совпадений нет)" else hits.joinToString("\n")
     }
-
-    // walkTopDown.onEnter требует Boolean синхронно — скоуп уже проверен на корне,
-    // deny-паттерны (.git и т.п.) проверяем чистой функцией без IO.
-    private fun gatewayAllowsSync(path: String): Boolean = true
 
     private suspend fun writeFile(path: String, content: String): String {
         val p = resolvePath(path)

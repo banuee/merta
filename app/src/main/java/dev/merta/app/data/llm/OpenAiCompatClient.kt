@@ -183,10 +183,7 @@ class OpenAiCompatClient(
                     ?: throw LlmException(-1, "пустое тело ответа")
                 val full = StringBuilder()
                 val frags = mutableMapOf<Int, FragAcc>()
-                reader.forEachLine { line ->
-                    if (!line.startsWith("data:")) return@forEachLine
-                    val payload = line.removePrefix("data:").trimStart()
-                    if (SseParser.isDone(payload)) return@forEachLine
+                fun handlePayload(payload: String) {
                     val delta = SseParser.extractDelta(payload)
                     if (!delta.isNullOrEmpty()) {
                         full.append(delta)
@@ -203,6 +200,33 @@ class OpenAiCompatClient(
                         if (frag.argsFrag != null) acc.args.append(frag.argsFrag)
                     }
                 }
+                // По SSE чанк может ехать несколькими data:-строками — склеиваем,
+                // как в postStream, иначе часть провайдеров молча теряет куски.
+                var dataBlock = StringBuilder()
+                reader.forEachLine { line ->
+                    when {
+                        line.startsWith("data:") -> {
+                            val payload = line.removePrefix("data:").trimStart()
+                            if (SseParser.isDone(payload)) {
+                                if (dataBlock.isNotEmpty()) {
+                                    handlePayload(dataBlock.toString())
+                                    dataBlock = StringBuilder()
+                                }
+                                return@forEachLine
+                            }
+                            dataBlock.append(payload)
+                            handlePayload(dataBlock.toString())
+                            dataBlock = StringBuilder()
+                        }
+                        line.isBlank() -> {
+                            if (dataBlock.isNotEmpty()) {
+                                handlePayload(dataBlock.toString())
+                                dataBlock = StringBuilder()
+                            }
+                        }
+                    }
+                }
+                if (dataBlock.isNotEmpty()) handlePayload(dataBlock.toString())
                 val calls = frags.entries.sortedBy { it.key }.mapNotNull { (idx, acc) ->
                     if (acc.name.isNullOrBlank()) return@mapNotNull null
                     OutToolCall(acc.id ?: "call-$idx", acc.name!!, acc.args.toString())
@@ -375,15 +399,10 @@ class OpenAiCompatClient(
         return sb.toString()
     }
 
-    private fun mentionsTools(errBody: String): Boolean {
-        val lower = errBody.lowercase()
-        return lower.contains("tool") && (
-            lower.contains("not support") ||
-                lower.contains("unsupported") ||
-                lower.contains("no endpoints") ||
-                lower.contains("400")
-            )
-    }
+    private fun mentionsTools(errBody: String): Boolean =
+        // 400 с упоминанием tools при отправленных tools — почти всегда
+        // «модель не умеет function calling»: повторяем ход без tools.
+        errBody.lowercase().contains("tool")
 
     private fun mentionsReasoning(errBody: String): Boolean {
         val lower = errBody.lowercase()

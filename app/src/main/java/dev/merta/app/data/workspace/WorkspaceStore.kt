@@ -32,10 +32,14 @@ class WorkspaceStore(
     suspend fun scope(): WorkspaceScope = scopeFlow.first()
 
     suspend fun addRoot(root: String) {
-        val clean = root.trim()
-        if (clean.isEmpty()) return
+        // Валидация: только абсолютные файловые пути и SAF-деревья;
+        // относительные, пустые и голый "/" (весь девайс) не принимаем.
+        val clean = root.trim().trimEnd('/')
+        if (clean.isEmpty() || clean == "/") return
+        if (!clean.startsWith("/") && !clean.startsWith("content://")) return
         ds.edit { p ->
-            p[KEY_ROOTS] = ((p[KEY_ROOTS] ?: setOf(defaultRoot)) + clean).toSet()
+            val cur = (p[KEY_ROOTS] ?: setOf(defaultRoot)).map { it.trimEnd('/') }.toSet()
+            p[KEY_ROOTS] = (cur + clean).toSet()
         }
     }
 
