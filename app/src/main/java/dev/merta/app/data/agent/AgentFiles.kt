@@ -11,9 +11,10 @@ import java.io.File
  *   skills/       — по папке на скилл, внутри SKILL.md (YAML frontmatter + инструкции)
  *   mcp.json      — MCP-серверы (пока список; подключение — отдельная фаза)
  *   chats/        — история чатов (SessionStore)
- *   workspace/    — рабочая папка по умолчанию (скоуп FileGateway)
  * ```
- * Файлы сюда закидываются через SAF-импорт (фаза инструментов) или `adb push`.
+ * Рабочей папки тут больше нет: внутренние пути недоступны ни проводнику,
+ * ни (без root) пользователю — агент работает только в папках из настроек.
+ * Файлы туда закидываются через SAF-импорт или обычным путём + all-files доступ.
  */
 class AgentFiles(context: Context) {
 
@@ -22,7 +23,6 @@ class AgentFiles(context: Context) {
     val skillsDir: File = File(root, "skills")
     val mcpFile: File = File(root, "mcp.json")
     val chatsDir: File = File(root, "chats")
-    val workspaceDir: File = File(root, "workspace")
 
     data class SkillInfo(val name: String, val description: String, val dirName: String)
     data class AgentStatus(
@@ -32,7 +32,6 @@ class AgentFiles(context: Context) {
     )
 
     init {
-        workspaceDir.mkdirs()
         chatsDir.mkdirs()
         skillsDir.mkdirs()
         if (!systemFile.exists()) systemFile.writeText(DEFAULT_SYSTEM)

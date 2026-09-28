@@ -5,6 +5,7 @@ import dev.merta.app.data.workspace.GatewayRules
 import dev.merta.app.data.workspace.WorkspaceScope
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -59,5 +60,43 @@ class ToolRegistryTest {
             ToolCall("1", ToolDefs.READ_FILE, mapOf("path" to "data.env")),
         ) { true }
         assertTrue(out.startsWith("error:"))
+    }
+
+    @Test
+    fun `autoApprove skips approval dialog`() = runBlocking {
+        var approvals = 0
+        val auto = ToolRegistry(
+            object : FileGateway {
+                override suspend fun currentScope() =
+                    WorkspaceScope("t", listOf(dir.absolutePath), emptyList())
+                override suspend fun saveScope(scope: WorkspaceScope) {}
+                override suspend fun check(path: String, write: Boolean): String? = null
+            },
+            dir.absolutePath,
+            autoApprove = true,
+        )
+        val out = auto.execute(
+            ToolCall("1", ToolDefs.WRITE_FILE, mapOf("path" to "new.txt", "content" to "hi")),
+        ) {
+            approvals++
+            true
+        }
+        assertTrue(out.startsWith("ok:"))
+        assertEquals(0, approvals)
+        assertTrue(File(dir, "new.txt").exists())
+    }
+
+    @Test
+    fun `without autoApprove approval is requested`() = runBlocking {
+        var approvals = 0
+        val out = registry.execute(
+            ToolCall("1", ToolDefs.WRITE_FILE, mapOf("path" to "new2.txt", "content" to "hi")),
+        ) {
+            approvals++
+            false
+        }
+        assertEquals("отклонено пользователем", out)
+        assertEquals(1, approvals)
+        assertFalse(File(dir, "new2.txt").exists())
     }
 }

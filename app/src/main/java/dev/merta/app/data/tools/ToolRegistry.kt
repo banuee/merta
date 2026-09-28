@@ -11,6 +11,8 @@ import java.util.concurrent.TimeUnit
 class ToolRegistry(
     private val gateway: FileGateway,
     private val defaultWorkdir: String,
+    /** Авто-разрешение деструктивных инструментов без диалога. */
+    private val autoApprove: Boolean = false,
 ) {
 
     suspend fun execute(
@@ -18,7 +20,7 @@ class ToolRegistry(
         requestApproval: suspend (PendingApproval) -> Boolean,
     ): String {
         val def = ToolDefs.byName(call.name) ?: return "error: неизвестный инструмент «${call.name}»"
-        if (def.needsApproval) {
+        if (def.needsApproval && !autoApprove) {
             val approved = requestApproval(PendingApproval(call.name, summary(call), preview(call)))
             if (!approved) return "отклонено пользователем"
         }
@@ -53,12 +55,15 @@ class ToolRegistry(
         }
 
     /**
-     * Резолвинг пути: пустой (для папок) и относительный — от рабочей папки.
+     * Резолвинг пути: пустой (для папок) и относительный — от рабочей папки
+     * (первой папки пользователя). Папки нет — относительный остаётся
+     * относительным, gateway ответит подсказкой про Параметры.
      * Модели любят писать `hello.txt` вместо абсолюта — не роняем, а чиним.
      */
     fun resolvePath(path: String): String {
         val p = path.trim()
         if (p.isEmpty() || p.startsWith("content://") || p.startsWith("/")) return p
+        if (defaultWorkdir.isBlank()) return p
         return defaultWorkdir.trimEnd('/') + "/" + p
     }
 

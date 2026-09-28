@@ -64,6 +64,7 @@ class AgentLoopTest {
             cb = object : OpenAiCompatClient.AgentCallbacks {
                 override fun onDelta(text: String) {}
                 override fun onReasoning(text: String) {}
+                override fun onTurnStart() {}
                 override fun onToolStart(name: String, summary: String) {
                     toolsSeen.add(name)
                 }
@@ -95,6 +96,7 @@ class AgentLoopTest {
         override fun onReasoning(text: String) {
             reasoningSeen.add(text)
         }
+        override fun onTurnStart() {}
         override fun onToolStart(name: String, summary: String) {
             toolsSeen.add(name)
         }

@@ -171,6 +171,13 @@ class MertaSettings(context: Context) {
         return if (name.isNullOrBlank()) modelId else name
     }
 
+    /** Авто-разрешение write_file/run_command без диалога (по умолчанию выкл). */
+    fun loadAutoApprove(): Boolean = prefs.getBoolean(KEY_AUTO_APPROVE, false)
+
+    fun saveAutoApprove(on: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_APPROVE, on).apply()
+    }
+
     companion object {
         private const val KEY_BASE_URL = "llm_base_url"
         private const val KEY_API_KEY = "llm_api_key"
@@ -182,6 +189,7 @@ class MertaSettings(context: Context) {
         private const val KEY_ACTIVE_PROVIDER = "llm_active_provider"
         private const val KEY_MODELS = "llm_models_cache"
         private const val KEY_SELECTED = "llm_selected_models"
+        private const val KEY_AUTO_APPROVE = "agent_auto_approve"
 
         private fun slugFor(baseUrl: String): String {
             val u = baseUrl.trimEnd('/').lowercase()

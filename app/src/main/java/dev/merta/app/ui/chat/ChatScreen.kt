@@ -3,8 +3,10 @@ package dev.merta.app.ui.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -34,6 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,6 +68,23 @@ fun ChatScreen(
     val ui by vm.state.collectAsState()
     var input by remember { mutableStateOf("") }
     var showEffort by remember { mutableStateOf(false) }
+    var menuFor by remember { mutableStateOf<Long?>(null) }
+    var editing by remember { mutableStateOf<ChatMessage?>(null) }
+    var editText by remember { mutableStateOf("") }
+    val clip = LocalClipboardManager.current
+
+    if (editing != null) {
+        EditMessageDialog(
+            text = editText,
+            onChange = { editText = it },
+            onSave = {
+                val id = editing!!.id
+                editing = null
+                vm.editAndResend(id, editText)
+            },
+            onDismiss = { editing = null },
+        )
+    }
 
     if (showEffort) {
         EffortDialog(
@@ -169,6 +193,30 @@ fun ChatScreen(
                     color = if (ui.effort != null) scheme.accent else scheme.textDim,
                 )
             }
+            // Auto-approve write_file/run_command без диалога (красный = осторожно).
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                    .background(
+                        if (ui.autoApprove) scheme.red.copy(alpha = 0.22f)
+                        else scheme.glass,
+                    )
+                    .border(
+                        1.dp,
+                        if (ui.autoApprove) scheme.red else scheme.stroke,
+                        RoundedCornerShape(MetroDimens.radiusSmall),
+                    )
+                    .metroClickable(targetScale = 0.93f) { vm.toggleAutoApprove() }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            ) {
+                Text(
+                    text = "auto",
+                    fontFamily = MetroFonts.text,
+                    fontSize = 13.sp,
+                    color = if (ui.autoApprove) scheme.red else scheme.textDim,
+                )
+            }
         }
 
         LazyColumn(
@@ -180,12 +228,36 @@ fun ChatScreen(
                 if (msg.role == ChatMessage.Role.THINKING && thought != null) {
                     ThoughtRow(thought, Modifier.animateItem())
                 } else {
-                    MessageBubble(msg.role, msg.text, Modifier.animateItem())
+                    MessageBubble(
+                        msg = msg,
+                        showMenu = menuFor == msg.id,
+                        onLongPress = { menuFor = msg.id },
+                        onDismissMenu = { menuFor = null },
+                        onCopy = {
+                            clip.setText(AnnotatedString(msg.text))
+                            menuFor = null
+                        },
+                        onEdit = {
+                            menuFor = null
+                            editText = msg.text
+                            editing = msg
+                        },
+                        canEdit = msg.role == ChatMessage.Role.USER && !ui.sending,
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
             if (ui.streaming != null) {
                 item(key = "streaming") {
-                    MessageBubble(ChatMessage.Role.ASSISTANT, ui.streaming + "▍")
+                    MessageBubble(
+                        msg = ChatMessage(-1, ChatMessage.Role.ASSISTANT, ui.streaming + "▍"),
+                        showMenu = false,
+                        onLongPress = {},
+                        onDismissMenu = {},
+                        onCopy = {},
+                        onEdit = {},
+                        canEdit = false,
+                    )
                 }
             }
         }
@@ -379,32 +451,127 @@ private fun ThoughtRow(thought: ThoughtData, modifier: Modifier = Modifier) {
     }
 }
 
+/** Пузырь сообщения: лонгпресс — меню (копировать / изменить), ответы — markdown. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(role: ChatMessage.Role, text: String, modifier: Modifier = Modifier) {
+private fun MessageBubble(
+    msg: ChatMessage,
+    showMenu: Boolean,
+    onLongPress: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onCopy: () -> Unit,
+    onEdit: () -> Unit,
+    canEdit: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val scheme = LocalMetroScheme.current
-    val bubble = when (role) {
+    val bubble = when (msg.role) {
         ChatMessage.Role.USER -> scheme.accent.copy(alpha = 0.22f)
         ChatMessage.Role.ASSISTANT -> scheme.glass
         else -> Color.Transparent
     }
-    val border = when (role) {
+    val border = when (msg.role) {
         ChatMessage.Role.USER -> scheme.accent.copy(alpha = 0.45f)
         else -> scheme.stroke
     }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(MetroDimens.radius))
-            .background(bubble)
-            .border(1.dp, border, RoundedCornerShape(MetroDimens.radius))
-            .padding(10.dp),
-    ) {
-        Text(
-            text = text,
-            fontFamily = MetroFonts.text,
-            fontSize = 14.sp,
-            color = if (role == ChatMessage.Role.SYSTEM) scheme.textDim else scheme.text,
-        )
+    Box(modifier = modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(MetroDimens.radius))
+                .background(bubble)
+                .border(1.dp, border, RoundedCornerShape(MetroDimens.radius))
+                .combinedClickable(onClick = {}, onLongClick = onLongPress)
+                .padding(10.dp),
+        ) {
+            if (msg.role == ChatMessage.Role.ASSISTANT) {
+                MarkdownText(msg.text, scheme.text)
+            } else {
+                Text(
+                    text = msg.text,
+                    fontFamily = MetroFonts.text,
+                    fontSize = 14.sp,
+                    color = if (msg.role == ChatMessage.Role.SYSTEM) scheme.textDim else scheme.text,
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = onDismissMenu,
+            containerColor = scheme.glassDeep,
+        ) {
+            DropdownMenuItem(
+                text = { Text("Копировать", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                onClick = onCopy,
+                colors = MenuDefaults.itemColors(textColor = scheme.text),
+            )
+            if (canEdit) {
+                DropdownMenuItem(
+                    text = { Text("Изменить и отправить заново", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                    onClick = onEdit,
+                    colors = MenuDefaults.itemColors(textColor = scheme.text),
+                )
+            }
+        }
+    }
+}
+
+/** Диалог изменения своего сообщения (память откатывается, ход идёт по новой). */
+@Composable
+private fun EditMessageDialog(text: String, onChange: (String) -> Unit, onSave: () -> Unit, onDismiss: () -> Unit) {
+    val scheme = LocalMetroScheme.current
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(MetroDimens.panelRadius))
+                .background(scheme.glassDeep)
+                .border(1.dp, scheme.accent, RoundedCornerShape(MetroDimens.panelRadius))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("ИЗМЕНИТЬ", fontFamily = MetroFonts.text, fontSize = 12.sp, letterSpacing = 1.5.sp, color = scheme.textDim)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                    .background(scheme.glassHover)
+                    .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+            ) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = onChange,
+                    textStyle = TextStyle(fontFamily = MetroFonts.text, fontSize = 15.sp, color = scheme.text),
+                    cursorBrush = SolidColor(scheme.accent),
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(scheme.glassHover)
+                        .metroClickable(targetScale = 0.97f, onClick = onDismiss)
+                        .padding(vertical = 12.dp),
+                ) {
+                    Text("Отмена", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(scheme.accent.copy(alpha = 0.85f))
+                        .metroClickable(targetScale = 0.97f, onClick = onSave)
+                        .padding(vertical = 12.dp),
+                ) {
+                    Text("Отправить", fontFamily = MetroFonts.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                }
+            }
+        }
     }
 }
 

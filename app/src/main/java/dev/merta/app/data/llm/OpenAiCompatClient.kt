@@ -83,6 +83,9 @@ class OpenAiCompatClient(
         /** Кусок размышлений модели (reasoning-стрим) — UI копит в Thought. */
         fun onReasoning(text: String)
 
+        /** Начало нового хода (промежуточный ответ/мышление — отдельными блоками). */
+        fun onTurnStart()
+
         fun onToolStart(name: String, summary: String)
         suspend fun onApproval(approval: PendingApproval): Boolean
     }
@@ -109,19 +112,25 @@ class OpenAiCompatClient(
         var toolsCur = true
         var turn = 0
         while (turn < maxTurns) {
-            val t = try {
-                postAgentTurn(model, transcript, effortCur, toolsCur, cb::onDelta, cb::onReasoning)
-            } catch (e: LlmException) {
-                val msg = e.message ?: ""
-                if (e.status == 400 && effortCur != null && mentionsReasoning(msg)) {
-                    effortCur = null
-                    continue
+            cb.onTurnStart()
+            // Повторы без effort/tools — тот же ход, новый onTurnStart не нужен.
+            var t: AgentTurn
+            while (true) {
+                try {
+                    t = postAgentTurn(model, transcript, effortCur, toolsCur, cb::onDelta, cb::onReasoning)
+                    break
+                } catch (e: LlmException) {
+                    val msg = e.message ?: ""
+                    if (e.status == 400 && effortCur != null && mentionsReasoning(msg)) {
+                        effortCur = null
+                        continue
+                    }
+                    if (e.status == 400 && toolsCur && mentionsTools(msg)) {
+                        toolsCur = false
+                        continue
+                    }
+                    throw e
                 }
-                if (e.status == 400 && toolsCur && mentionsTools(msg)) {
-                    toolsCur = false
-                    continue
-                }
-                throw e
             }
             if (t.text.isNotBlank()) {
                 totalText.append(t.text)

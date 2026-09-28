@@ -48,6 +48,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val providerName: String = "",
         val modelDisplayName: String = "",
         val effort: String? = null,
+        val autoApprove: Boolean = false,
         val sessionId: String = "",
         val sessions: List<SessionStore.SessionMeta> = emptyList(),
         val groups: List<ProviderGroup> = emptyList(),
@@ -69,12 +70,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var approvalGate: CompletableDeferred<Boolean>? = null
     /** Последний известный скоуп папок (для системного сообщения — модель должна знать все корни). */
     private val scopeState = MutableStateFlow<WorkspaceScope?>(null)
+    /** Текущий Thought хода (для onReasoning/onApproval между onTurnStart). */
+    private var currentThoughtId: Long? = null
+    private var currentThoughtStart = 0L
 
     private fun toolRegistry(): ToolRegistry {
         val app = getApplication<Application>()
-        val files = AgentFiles(app)
-        val store = WorkspaceStore(app, files.workspaceDir.absolutePath)
-        return ToolRegistry(FileGatewayImpl(store), files.workspaceDir.absolutePath)
+        val store = WorkspaceStore(app)
+        // Дефолт для относительных путей — первая папка пользователя;
+        // пусто — относительные резолвить не во что, gateway вернёт подсказку.
+        val defaultWorkdir = scopeState.value?.allowedRoots?.firstOrNull() ?: ""
+        return ToolRegistry(FileGatewayImpl(store), defaultWorkdir, settings.loadAutoApprove())
     }
 
     /** Ответ пользователя в диалоге подтверждения инструмента. */
@@ -103,8 +109,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         refreshConfig()
         refreshSessions()
         viewModelScope.launch {
-            WorkspaceStore(getApplication(), AgentFiles(getApplication()).workspaceDir.absolutePath)
-                .scopeFlow.collect { scopeState.value = it }
+            val app = getApplication<Application>()
+            val store = WorkspaceStore(app)
+            // Миграция: внутренняя filesDir-папка исключена из скоупа —
+            // выкидываем её из сохранённых корней один раз.
+            val internalWs = java.io.File(AgentFiles(app).root, "workspace").absolutePath
+            if (store.scope().allowedRoots.any { it == internalWs }) {
+                store.removeRoot(internalWs)
+            }
+            store.scopeFlow.collect { scopeState.value = it }
         }
     }
 
@@ -142,6 +155,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, hint))
         }
+        _state.update { it.copy(autoApprove = settings.loadAutoApprove()) }
+    }
+
+    fun toggleAutoApprove() {
+        settings.saveAutoApprove(!settings.loadAutoApprove())
+        refreshConfig()
     }
 
     fun setEffort(effort: String?) {
@@ -236,31 +255,63 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _state.value.sending) return
+        if (!checkConfigured()) return
+        cancelStream(keepPartial = false)
+        push(ChatMessage(nextId(), ChatMessage.Role.USER, trimmed))
+        startTurn()
+    }
+
+    /**
+     * Изменить своё сообщение и отправить заново: всё после него выкидывается
+     * из ленты (память модели откатывается), текст заменяется, ход идёт по новой.
+     */
+    fun editAndResend(id: Long, newText: String) {
+        val trimmed = newText.trim()
+        if (trimmed.isEmpty() || _state.value.sending) return
+        if (!checkConfigured()) return
+        cancelStream(keepPartial = false)
+        val msgs = _state.value.messages
+        val idx = msgs.indexOfFirst { it.id == id && it.role == ChatMessage.Role.USER }
+        if (idx < 0) return
+        val kept = msgs.take(idx).toMutableList()
+        kept.add(msgs[idx].copy(text = trimmed))
+        _state.update { it.copy(messages = kept, streaming = null) }
+        startTurn()
+    }
+
+    private fun checkConfigured(): Boolean {
         val provider = settings.activeProvider()
         if (provider == null || !provider.hasKey) {
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Выбери провайдера с ключом и модель — пузырь под заголовком."))
-            return
+            return false
         }
-        val modelId = settings.selectedModel(provider.id)
-        if (modelId.isBlank()) {
+        if (settings.selectedModel(provider.id).isBlank()) {
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Выбери модель — пузырь под заголовком."))
-            return
+            return false
         }
-        cancelStream(keepPartial = false)
-        push(ChatMessage(nextId(), ChatMessage.Role.USER, trimmed))
+        return true
+    }
+
+    /** Ход агента: последнее USER-сообщение в ленте уже лежит, стрим идёт с чистого листа. */
+    private fun startTurn() {
+        val provider = settings.activeProvider() ?: return
+        val modelId = settings.selectedModel(provider.id)
 
         // Транскрипт для API: системный промт + пользователь/ассистент
-        // (SYSTEM-строки ленты — только отображение, в запрос не идут).
+        // (SYSTEM/THINKING-строки ленты — только отображение, в запрос не идут).
         // К системному добавляем динамический список разрешённых папок:
         // модель обязана знать ВСЕ корни, иначе сидит только в дефолтной.
-        val wsDir = AgentFiles(getApplication()).workspaceDir.absolutePath
-        val roots = scopeState.value?.allowedRoots?.takeIf { it.isNotEmpty() } ?: listOf(wsDir)
-        val system = agentFiles.loadSystemPrompt() +
+        val roots = scopeState.value?.allowedRoots?.takeIf { it.isNotEmpty() }
+        val system = agentFiles.loadSystemPrompt() + if (roots == null) {
+            "\n\nРазрешённых папок нет — попроси пользователя добавить папку " +
+                "в Параметрах (Рабочая папка) и пока работай без файлов."
+        } else {
             "\n\nРазрешённые папки:\n" + roots.joinToString("\n") { "- $it" } +
-            "\nРабочая папка по умолчанию: $wsDir. " +
-            "Относительные пути (hello.txt) резолвятся от неё; " +
-            "файлы в других разрешённых папках открывай по АБСОЛЮТНОМУ пути. " +
-            "Сначала list_dir по нужной папке — не выдумывай содержимое."
+                "\nРабочая папка по умолчанию: ${roots.first()}. " +
+                "Относительные пути (hello.txt) резолвятся от неё; " +
+                "файлы в других разрешённых папках открывай по АБСОЛЮТНОМУ пути. " +
+                "Сначала list_dir по нужной папке — не выдумывай содержимое."
+        }
         val transcript = mutableListOf<TurnMessage>()
         if (system.isNotBlank()) transcript.add(TurnMessage("system", system))
         transcript.addAll(
@@ -278,13 +329,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val client = makeProvider(provider) as OpenAiCompatClient
         val effort = settings.load().effort
         val registry = toolRegistry()
-        val thinkStart = System.currentTimeMillis()
-        val thoughtId = nextId()
-        push(ChatMessage(thoughtId, ChatMessage.Role.THINKING, "", ThoughtData(active = true, startedMs = thinkStart)))
+        currentThoughtId = null
         _state.update { it.copy(sending = true, streaming = "") }
         streamJob = viewModelScope.launch {
             try {
-                val full = withContext(Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     client.runAgent(
                         modelId, transcript, effort, registry,
                         cb = object : OpenAiCompatClient.AgentCallbacks {
@@ -293,7 +342,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             }
 
                             override fun onReasoning(text: String) {
-                                appendReasoning(thoughtId, text)
+                                currentThoughtId?.let { appendReasoning(it, text) }
+                            }
+
+                            override fun onTurnStart() {
+                                newTurn()
                             }
 
                             override fun onToolStart(name: String, summary: String) {
@@ -302,23 +355,52 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             }
 
                             override suspend fun onApproval(approval: PendingApproval): Boolean {
-                                addThinkStep(thoughtId, "ожидание: " + approval.summary)
+                                currentThoughtId?.let { addThinkStep(it, "ожидание: " + approval.summary) }
                                 return waitApproval(approval)
                             }
                         },
                     )
                 }
-                finishThought(thoughtId, System.currentTimeMillis() - thinkStart)
+                // Запечатать последний ход: стрим — в пузырь, Thought — готов.
+                sealTurn()
                 _state.update { it.copy(streaming = null, sending = false) }
-                if (full.isNotBlank()) push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, full))
             } catch (e: LlmException) {
                 _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
-                finishThought(thoughtId, System.currentTimeMillis() - thinkStart)
+                currentThoughtId?.let { finishThought(it, System.currentTimeMillis() - currentThoughtStart) }
+                currentThoughtId = null
             }
             persist()
+        }
+    }
+
+    /**
+     * Граница хода агентного цикла: текущий стрим запечатывается отдельным
+     * пузырём ответа, текущий Thought завершается, открываются новые.
+     */
+    private fun newTurn() {
+        sealTurn()
+        val now = System.currentTimeMillis()
+        currentThoughtStart = now
+        val id = nextId()
+        currentThoughtId = id
+        push(ChatMessage(id, ChatMessage.Role.THINKING, "", ThoughtData(active = true, startedMs = now)))
+    }
+
+    /** Запечатать текущий ход: непустой стрим — в пузырь, Thought — готов. */
+    private fun sealTurn() {
+        val now = System.currentTimeMillis()
+        val s = _state.value.streaming
+        val thought = currentThoughtId
+        currentThoughtId = null
+        _state.update { it.copy(streaming = "") }
+        if (!s.isNullOrBlank()) {
+            push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, s))
+        }
+        if (thought != null) {
+            finishThought(thought, now - currentThoughtStart)
         }
     }
 

@@ -89,7 +89,7 @@ class MertaActivity : ComponentActivity() {
                     val settings = remember { MertaSettings(applicationContext) }
                     val agentFiles = remember { AgentFiles(applicationContext) }
                     val workspace = remember {
-                        WorkspaceStore(applicationContext, agentFiles.workspaceDir.absolutePath)
+                        WorkspaceStore(applicationContext)
                     }
                     var route by remember {
                         mutableStateOf(

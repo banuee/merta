@@ -12,11 +12,11 @@ private val Context.workspaceDataStore by preferencesDataStore("workspace")
 
 /**
  * Персистентность скоупов (DataStore). Секретов тут нет — только пути.
- * Дефолтный корень — приватный `merta/workspace` (неудаляемый).
+ * Дефолтной папки нет: пользователь добавляет свои (иначе инструментам
+ * негде работать — gateway честно отвечает подсказкой).
  */
 class WorkspaceStore(
     context: Context,
-    private val defaultRoot: String,
 ) {
     private val appContext = context.applicationContext
     private val ds get() = appContext.workspaceDataStore
@@ -24,7 +24,7 @@ class WorkspaceStore(
     val scopeFlow: Flow<WorkspaceScope> = ds.data.map { p ->
         WorkspaceScope(
             name = "merta-ws",
-            allowedRoots = (p[KEY_ROOTS] ?: setOf(defaultRoot)).toList().sorted(),
+            allowedRoots = (p[KEY_ROOTS] ?: emptySet()).toList().sorted(),
             deniedPatterns = (p[KEY_DENIED] ?: DEFAULT_DENIED).toList().sorted(),
         )
     }
@@ -38,16 +38,15 @@ class WorkspaceStore(
         if (clean.isEmpty() || clean == "/") return
         if (!clean.startsWith("/") && !clean.startsWith("content://")) return
         ds.edit { p ->
-            val cur = (p[KEY_ROOTS] ?: setOf(defaultRoot)).map { it.trimEnd('/') }.toSet()
+            val cur = (p[KEY_ROOTS] ?: emptySet()).map { it.trimEnd('/') }.toSet()
             p[KEY_ROOTS] = (cur + clean).toSet()
         }
     }
 
     suspend fun removeRoot(root: String) {
-        if (root == defaultRoot) return
         ds.edit { p ->
-            val next = (p[KEY_ROOTS] ?: setOf(defaultRoot)) - root
-            p[KEY_ROOTS] = next.ifEmpty { setOf(defaultRoot) }
+            val next = (p[KEY_ROOTS] ?: emptySet()) - root - (root.trimEnd('/'))
+            p[KEY_ROOTS] = next
         }
     }
 
@@ -66,6 +65,10 @@ class FileGatewayImpl(private val store: WorkspaceStore) : FileGateway {
         for (root in scope.allowedRoots) store.addRoot(root)
     }
 
-    override suspend fun check(path: String, write: Boolean): String? =
-        GatewayRules.checkAccess(store.scope(), path, write)
+    override suspend fun check(path: String, write: Boolean): String? {
+        if (store.scope().allowedRoots.isEmpty()) {
+            return "нет разрешённых папок — добавь папку в Параметрах (Рабочая папка)"
+        }
+        return GatewayRules.checkAccess(store.scope(), path, write)
+    }
 }

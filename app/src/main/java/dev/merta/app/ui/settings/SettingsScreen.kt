@@ -232,10 +232,15 @@ fun SettingsScreen(
         SectionLabel("РАБОЧАЯ ПАПКА")
         val roots = ws?.allowedRoots ?: emptyList()
         if (roots.isEmpty()) {
-            Text("Загрузка…", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.textDim)
+            Text(
+                "Папок нет — агент работает без файлов. Добавь папку ниже.",
+                fontFamily = MetroFonts.text,
+                fontSize = 14.sp,
+                color = scheme.textDim,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
         }
         for (root in roots) {
-            val removable = root != agentFiles.workspaceDir.absolutePath
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -254,10 +259,8 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f),
                     maxLines = 2,
                 )
-                if (removable) {
-                    MetroSmallButton("×") {
-                        scope.launch { workspace.removeRoot(root) }
-                    }
+                MetroSmallButton("×") {
+                    scope.launch { workspace.removeRoot(root) }
                 }
             }
         }
@@ -326,7 +329,7 @@ fun SettingsScreen(
             Text("+ ДОБАВИТЬ ПУТЬ", fontFamily = MetroFonts.text, fontSize = 14.sp, letterSpacing = 1.5.sp, color = scheme.text)
         }
         Text(
-            "Внутренняя папка видна только приложению — для работы с проводником добавь /sdcard/… и выдай доступ.",
+            "Агент работает только в этих папках. Для путей /sdcard/… выдай доступ ко всем файлам.",
             fontFamily = MetroFonts.text,
             fontSize = 12.sp,
             color = scheme.textDim,
