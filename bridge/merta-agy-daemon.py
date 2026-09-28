@@ -26,9 +26,91 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HOST = "127.0.0.1"
 PORT = 18080
 HOME = os.path.expanduser("~")
-AGY = os.path.join(HOME, ".agy-autopatch", "bin", "antigravity")
-PATCHER = os.path.join(HOME, ".agy-autopatch", "bin", "agy-autopatch")
-LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daemon.log")
+# Termux-home виден и внутри proot (bind), agy может жить там (musl-static).
+THOME = "/data/data/com.termux/files/home"
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOG = os.path.join(HERE, "daemon.log")
+CONFIG = os.path.join(HERE, "config.json")
+
+DEFAULT_MODEL = "gemini-3.8-flash"
+SAFE_MODEL = re.compile(r"^[a-zA-Z0-9._-]+$")
+
+# Маркеры закэшированных credentials agy (лежат в HOME, где логинились).
+CRED_MARKERS = (".config/antigravity", ".agy", ".config/agy", ".antigravity",
+                ".config/google-antigravity")
+
+
+def load_config():
+    try:
+        with open(CONFIG) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def first_existing(paths):
+    for p in paths:
+        if p and os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return ""
+
+
+def resolve_agy(cfg):
+    if cfg.get("agy_bin") and os.path.isfile(cfg["agy_bin"]):
+        return cfg["agy_bin"]
+    if os.environ.get("AGY_BIN") and os.path.isfile(os.environ["AGY_BIN"]):
+        return os.environ["AGY_BIN"]
+    cands = [os.path.join(HOME, ".agy-autopatch", "bin", "antigravity"),
+             os.path.join(HOME, ".agy-autopatch", "bin", "agy"),
+             os.path.join(THOME, ".local", "bin", "agy"),
+             os.path.join(THOME, ".local", "bin", "antigravity"),
+             os.path.join(THOME, "bin", "agy")]
+    found = first_existing(cands)
+    if found:
+        return found
+    for name in ("antigravity", "agy"):
+        for d in os.environ.get("PATH", "").split(os.pathsep):
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+    return ""
+
+
+def resolve_patcher(cfg):
+    if cfg.get("patcher_bin") and os.path.isfile(cfg.get("patcher_bin")):
+        return cfg["patcher_bin"]
+    if os.environ.get("AGYA_PATCHER") and os.path.isfile(os.environ["AGYA_PATCHER"]):
+        return os.environ["AGYA_PATCHER"]
+    cands = [os.path.join(HOME, ".agy-autopatch", "bin", "agy-autopatch"),
+             os.path.join(THOME, ".agy-autopatch", "bin", "agy-autopatch"),
+             os.path.join(THOME, "bin", "agy-autopatch")]
+    found = first_existing(cands)
+    if found:
+        return found
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        p = os.path.join(d, "agy-autopatch")
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return ""
+
+
+def find_creds_home(cfg):
+    """HOME с закэшированными credentials (там agy залогинен)."""
+    if cfg.get("agy_home") and os.path.isdir(cfg["agy_home"]):
+        return cfg["agy_home"]
+    if os.environ.get("AGY_HOME_DIR") and os.path.isdir(os.environ["AGY_HOME_DIR"]):
+        return os.environ["AGY_HOME_DIR"]
+    for h in (HOME, THOME):
+        for m in CRED_MARKERS:
+            if os.path.exists(os.path.join(h, m)):
+                return h
+    return HOME
+
+
+CFG = load_config()
+AGY = resolve_agy(CFG)
+PATCHER = resolve_patcher(CFG)
+AGY_HOME = find_creds_home(CFG)
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 SAFE_MODEL = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -47,8 +129,12 @@ def log(msg):
 
 
 def agy_version():
+    if not AGY:
+        return "not found"
     try:
-        p = subprocess.run([AGY, "--version"], capture_output=True, text=True, timeout=30)
+        env = dict(os.environ, HOME=AGY_HOME)
+        p = subprocess.run([AGY, "--version"], capture_output=True, text=True,
+                           timeout=30, stdin=subprocess.DEVNULL, env=env)
         return p.stdout.strip() or p.stderr.strip()
     except Exception as e:
         return "error: %s" % e
@@ -56,6 +142,8 @@ def agy_version():
 
 def run_patch_cmd(args, timeout=300):
     # Явный --agy: discovery патчера ищет имя `agy`, а релиз кладёт `antigravity`.
+    if not PATCHER:
+        return 99, "agy-autopatch not found (put path into %s as {\"patcher_bin\": \"...\"})" % CONFIG
     cmd = [PATCHER, "--agy", AGY] + args
     log("patch-cmd: %s" % " ".join(cmd))
     try:
@@ -135,11 +223,17 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/status":
             code, out = run_patch_cmd(["check", "--quiet"], timeout=120)
             self._json({"ok": True, "agy_version": agy_version(),
+                        "agy_bin": AGY, "creds_home": AGY_HOME,
                         "patch": {"code": code, "output": out[-1500:]}})
         elif self.path == "/models":
+            if not AGY:
+                self._json({"ok": False, "error": "agy not found"}, 500)
+                return
             try:
+                env = dict(os.environ, HOME=AGY_HOME)
                 p = subprocess.run([AGY, "models"], capture_output=True,
-                                   text=True, timeout=120)
+                                   text=True, timeout=120,
+                                   stdin=subprocess.DEVNULL, env=env)
                 self._json({"ok": True, "code": p.returncode,
                             "output": (p.stdout + p.stderr)[-20000:]})
             except Exception as e:
@@ -168,20 +262,27 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 
     def _stream_run(self, body):
+        if not AGY:
+            self._json({"ok": False,
+                        "error": "agy not found (searched proot + termux-home; " +
+                                 "put path into %s as {\"agy_bin\": \"...\"})" % CONFIG}, 500)
+            return
         cmd = build_agy_cmd(body)
         timeout = body.get("timeout_s") or 0
         try:
             timeout = max(0, int(timeout))
         except (ValueError, TypeError):
             timeout = 0
-        log("run: model=%s conv=%s effort=%s yolo=%s dirs=%d prompt=%.60s" % (
+        log("run: model=%s conv=%s effort=%s yolo=%s dirs=%d home=%s prompt=%.60s" % (
             body.get("model") or "-", (body.get("conversation_id") or "-")[:8],
             body.get("effort") or "-", bool(body.get("yolo")),
-            len(body.get("dirs") or []), body.get("prompt", "")))
+            len(body.get("dirs") or []), AGY_HOME, body.get("prompt", "")))
         try:
+            # HOME с credentials: agy ищет закэшированный логин там, где логинились.
+            env = dict(os.environ, HOME=AGY_HOME)
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, text=True,
-                                    bufsize=1)
+                                    bufsize=1, stdin=subprocess.DEVNULL, env=env)
         except FileNotFoundError:
             self._json({"ok": False, "error": "agy not found: %s" % AGY}, 500)
             return

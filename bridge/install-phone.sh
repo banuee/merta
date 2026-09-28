@@ -36,6 +36,30 @@ say "качаю демона…"
 curl -fsSL "$REPO/merta-agy-daemon.py" -o "$ROOTFS/root/merta-agy/daemon.py" \
   || die "не скачался daemon.py (сеть?)"
 
+# Поиск agy и патчера: сначала Termux-home, потом proot.
+say "ищу agy…"
+AGY_BIN=""
+for c in "$HOME/.local/bin/agy" "$HOME/.local/bin/antigravity" \
+         "$HOME/bin/agy" "$HOME/bin/antigravity" "$PREFIX/bin/agy"; do
+  [ -x "$c" ] && { AGY_BIN="$c"; break; }
+done
+if [ -z "$AGY_BIN" ]; then
+  AGY_BIN="$(command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || true)"
+fi
+PAGY="$(proot-distro login "$DISTRO" -- sh -c 'command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || ls /root/.agy-autopatch/bin/antigravity /root/.agy-autopatch/bin/agy 2>/dev/null' 2>/dev/null | head -1)"
+PPATCHER="$(proot-distro login "$DISTRO" -- sh -c 'command -v agy-autopatch 2>/dev/null' 2>/dev/null | head -1)"
+# Пути из proot видны демону как есть (тот же корень).
+[ -n "$PAGY" ] && [ -z "$AGY_BIN" ] && AGY_BIN="$PAGY"
+say "agy: ${AGY_BIN:-НЕ НАЙДЕН}"
+say "патчер: ${PPATCHER:-не найден}"
+# config.json для демона (пустые значения — автопоиск).
+{
+  printf '{'
+  printf '"agy_bin": "%s", ' "$AGY_BIN"
+  printf '"patcher_bin": "%s"' "$PPATCHER"
+  printf '}\n'
+} > "$ROOTFS/root/merta-agy/config.json"
+
 # Точка входа ~/bin/merta-agy (старт + status).
 cat > "$HOME/bin/merta-agy" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
@@ -87,11 +111,16 @@ chmod +x "$HOME/.termux/boot/merta-agy"
 say "boot-скрипт записан (нужен аддон Termux:Boot)"
 
 # Проверка agy-autopatch в proot (для автопатча).
-if login command -v agy-autopatch >/dev/null 2>&1; then
+if [ -n "$PPATCHER" ]; then
   say "agy-autopatch: есть"
 else
   say "! agy-autopatch не найден в proot — автопатч работать не будет"
 fi
 
+say "перезапуск демона…"
+PIDF="$HOME/merta-agy.pid"
+[ -f "$PIDF" ] && kill -9 "$(cat "$PIDF")" 2>/dev/null
+sleep 1
+rm -f "$PIDF"
 say "запуск демона…"
 "$HOME/bin/merta-agy"
