@@ -131,6 +131,58 @@ fun ModelsScreen(
         }
         Spacer(Modifier.height(8.dp))
 
+        // Agy: каталог из CLI требует авторизации — модель вводится вручную
+        // (узнать ID: `agy models` в Termux; пусто = модель по умолчанию).
+        val agy = vm.agyProvider()
+        if (agy != null) {
+            var manual by remember(agy.id, currentModel) {
+                mutableStateOf(if (agy.id == activeProviderId) currentModel else "")
+            }
+            Text(
+                text = "AGY",
+                fontFamily = MetroFonts.text,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                letterSpacing = 1.5.sp,
+                color = scheme.accent,
+                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(MetroDimens.radius))
+                    .background(scheme.glass)
+                    .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radius))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                BasicTextField(
+                    value = manual,
+                    onValueChange = { manual = it },
+                    textStyle = TextStyle(fontFamily = MetroFonts.text, fontSize = 15.sp, color = scheme.text),
+                    cursorBrush = SolidColor(scheme.accent),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { inner ->
+                        if (manual.isEmpty()) Text("ID модели agy (пусто = по умолчанию)…", fontFamily = MetroFonts.text, fontSize = 13.sp, color = scheme.textDim)
+                        inner()
+                    },
+                )
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(scheme.accent.copy(alpha = 0.85f))
+                        .metroClickable(targetScale = 0.93f) { onPick(agy.id, manual.trim()) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text("ОК", fontFamily = MetroFonts.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+
         when {
             ui.modelsLoading -> Text("Загружаю каталог…", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.textDim)
             ui.modelsError != null -> Text(ui.modelsError!!, fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.textDim)

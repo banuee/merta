@@ -8,7 +8,10 @@
     <!-- OTA-обновления через GitHub Releases (та же система, что в metro-launcher). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <application android:theme="@style/Theme.App" android:label="Merta">
+    <application
+        android:theme="@style/Theme.App"
+        android:label="Merta"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MertaActivity"
             android:exported="true"
@@ -28,5 +31,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Shizuku: биндер привилегированного сервиса (pm install, input tap). -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 </manifest>

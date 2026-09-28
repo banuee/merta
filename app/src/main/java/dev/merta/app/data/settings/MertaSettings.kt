@@ -33,6 +33,9 @@ class MertaSettings(context: Context) {
         const val ZEN = "https://opencode.ai/zen/v1"
         const val OLLAMA = "http://127.0.0.1:11434/v1"
 
+        /** Локальный демон merta-agy (proot, Antigravity CLI). */
+        const val AGY_DAEMON = "http://127.0.0.1:18080"
+
         /** Дефолтные модели-подсказки для пресетов. */
         fun defaultModelFor(baseUrl: String): String = when (baseUrl.trimEnd('/')) {
             ZEN -> "mimo-v2.5-free"
@@ -93,11 +96,19 @@ class MertaSettings(context: Context) {
 
     /**
      * Список провайдеров. Первый запуск: миграция со старого одиночного конфига
-     * (endpoint/ключ) либо сиды OpenRouter + Zen с пустыми ключами.
+     * (endpoint/ключ) либо сиды OpenRouter + Zen + Agy с пустыми ключами.
+     * Agy досеивается и в старые списки (ключа не требует).
      */
     fun loadProviders(): List<Provider> {
         val raw = prefs.getString(KEY_PROVIDERS, null)
-        if (raw != null) return ProviderJson.providersFromJson(raw)
+        if (raw != null) {
+            val stored = ProviderJson.providersFromJson(raw).toMutableList()
+            if (stored.none { it.isAgy }) {
+                stored.add(Provider("agy", "Agy", Presets.AGY_DAEMON, "", Provider.Kind.AGY))
+                saveProviders(stored)
+            }
+            return stored
+        }
         val legacyUrl = prefs.getString(KEY_BASE_URL, "") ?: ""
         val legacyKey = prefs.getString(KEY_API_KEY, "") ?: ""
         val seeded = when {
@@ -108,10 +119,12 @@ class MertaSettings(context: Context) {
                     baseUrl = legacyUrl.trim().trimEnd('/'),
                     apiKey = legacyKey,
                 ),
+                Provider("agy", "Agy", Presets.AGY_DAEMON, "", Provider.Kind.AGY),
             )
             else -> listOf(
                 Provider("openrouter", "OpenRouter", Presets.OPENROUTER, ""),
                 Provider("zen", "Zen", Presets.ZEN, ""),
+                Provider("agy", "Agy", Presets.AGY_DAEMON, "", Provider.Kind.AGY),
             )
         }
         saveProviders(seeded)

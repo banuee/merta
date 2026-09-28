@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +52,8 @@ import dev.merta.app.data.agent.AgentFiles
 import dev.merta.app.data.settings.MertaSettings
 import dev.merta.app.data.wallpaper.WallpaperRepository
 import dev.merta.app.data.workspace.WorkspaceStore
+import dev.merta.app.adb.ShizukuOps
+import kotlinx.coroutines.flow.StateFlow
 import dev.merta.app.ui.sessions.MetroSmallButton
 import dev.merta.app.ui.theme.LocalMetroScheme
 import dev.merta.app.ui.theme.MetroDimens
@@ -68,6 +71,9 @@ fun SettingsScreen(
     agentFiles: AgentFiles,
     workspace: WorkspaceStore,
     wallpaper: WallpaperRepository,
+    shizukuStatus: StateFlow<ShizukuOps.ShizukuStatus>,
+    onRefreshShizuku: () -> Unit,
+    onRequestShizuku: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
     onBack: () -> Unit,
@@ -95,6 +101,7 @@ fun SettingsScreen(
     val agentStatus = remember { agentFiles.status() }
     val ws by workspace.scopeFlow.collectAsState(initial = null)
     val activeProvider = remember { settings.activeProvider() }
+    LaunchedEffect(Unit) { onRefreshShizuku() }
 
     val safLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -227,6 +234,12 @@ fun SettingsScreen(
                 color = scheme.textDim,
             )
         }
+        Spacer(Modifier.height(6.dp))
+        ShizukuRow(
+            status = shizukuStatus.collectAsState().value,
+            onRefresh = onRefreshShizuku,
+            onRequest = onRequestShizuku,
+        )
 
         Spacer(Modifier.height(16.dp))
         SectionLabel("РАБОЧАЯ ПАПКА")
@@ -371,6 +384,39 @@ fun SettingsScreen(
             color = scheme.textDim,
         )
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+/** Строка статуса Shizuku: установка APK, пакеты, тапы. */
+@Composable
+private fun ShizukuRow(
+    status: ShizukuOps.ShizukuStatus,
+    onRefresh: () -> Unit,
+    onRequest: () -> Unit,
+) {
+    val scheme = LocalMetroScheme.current
+    val text = when (status) {
+        ShizukuOps.ShizukuStatus.READY -> "Shizuku: готов"
+        ShizukuOps.ShizukuStatus.NOT_RUNNING -> "Shizuku: не запущен"
+        ShizukuOps.ShizukuStatus.NOT_AUTHORIZED -> "Shizuku: нет разрешения"
+        ShizukuOps.ShizukuStatus.NOT_INSTALLED -> "Shizuku: недоступен"
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text,
+            fontFamily = MetroFonts.text,
+            fontSize = 12.sp,
+            color = if (status == ShizukuOps.ShizukuStatus.READY) scheme.accent else scheme.textDim,
+            modifier = Modifier.weight(1f),
+        )
+        if (status == ShizukuOps.ShizukuStatus.NOT_AUTHORIZED) {
+            MetroSmallButton("Разрешить", onClick = onRequest)
+        } else {
+            MetroSmallButton("⟳", onClick = onRefresh)
+        }
     }
 }
 

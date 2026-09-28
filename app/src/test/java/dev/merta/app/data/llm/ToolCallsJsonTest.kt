@@ -42,12 +42,16 @@ class ToolCallsJsonTest {
 class ToolsDefTest {
 
     @Test
-    fun `five tools with approval flags`() {
-        assertEquals(5, ToolDefs.ALL.size)
+    fun `nine tools with approval flags`() {
+        assertEquals(9, ToolDefs.ALL.size)
         assertNotNull(ToolDefs.byName("read_file"))
         assertEquals(false, ToolDefs.byName("read_file")!!.needsApproval)
         assertEquals(true, ToolDefs.byName("write_file")!!.needsApproval)
         assertEquals(true, ToolDefs.byName("run_command")!!.needsApproval)
+        assertEquals(true, ToolDefs.byName("install_apk")!!.needsApproval)
+        assertEquals(false, ToolDefs.byName("list_packages")!!.needsApproval)
+        assertEquals(true, ToolDefs.byName("tap_screen")!!.needsApproval)
+        assertEquals(true, ToolDefs.byName("swipe_screen")!!.needsApproval)
     }
 
     @Test

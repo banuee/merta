@@ -80,7 +80,32 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Дефолт для относительных путей — первая папка пользователя;
         // пусто — относительные резолвить не во что, gateway вернёт подсказку.
         val defaultWorkdir = scopeState.value?.allowedRoots?.firstOrNull() ?: ""
-        return ToolRegistry(FileGatewayImpl(store), defaultWorkdir, settings.loadAutoApprove())
+        return ToolRegistry(
+            FileGatewayImpl(store), defaultWorkdir,
+            settings.loadAutoApprove(), dev.merta.app.adb.ShizukuOpsImpl(app),
+        )
+    }
+
+    /** Статус Shizuku для настроек (обновляется по запросу). */
+    val shizukuStatus = MutableStateFlow(dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING)
+
+    fun refreshShizuku() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                shizukuStatus.value = dev.merta.app.adb.ShizukuOpsImpl(getApplication()).status()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private val shizukuPermListener =
+        rikka.shizuku.Shizuku.OnRequestPermissionResultListener { _, _ -> refreshShizuku() }
+
+    fun requestShizukuPermission() {
+        try {
+            dev.merta.app.adb.ShizukuOpsImpl(getApplication()).requestPermission(SHIZUKU_PERM_CODE)
+        } catch (_: Exception) {
+        }
     }
 
     /** Ответ пользователя в диалоге подтверждения инструмента. */
@@ -119,6 +144,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             store.scopeFlow.collect { scopeState.value = it }
         }
+        // Автопатч agy при входе: демон отвечает → check → слетел → patch.
+        // Демона нет — тихо, agy просто будет недоступен.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dev.merta.app.adb.ShizukuOpsImpl(getApplication()).addPermissionListener(shizukuPermListener)
+            } catch (_: Exception) {
+            }
+            try {
+                val agy = settings.loadProviders().find { it.isAgy } ?: return@launch
+                val daemon = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl)
+                val st = daemon.status()
+                if (!st.alive) return@launch
+                if (st.patchCode == 1) {
+                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "agy: патч слетел, перепатчиваю…"))
+                    try {
+                        val (code, _) = daemon.patch()
+                        push(
+                            ChatMessage(
+                                nextId(), ChatMessage.Role.SYSTEM,
+                                if (code == 0) "agy: перепатчен, можно работать." else "agy: не перепатчился (code $code).",
+                            ),
+                        )
+                    } catch (e: LlmException) {
+                        push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "agy: не перепатчился: ${e.message}"))
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /** Перечитать конфиг (после настроек/пикеров). */
@@ -136,10 +190,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
         } else {
             val modelId = settings.selectedModel(provider.id)
-            val label = settings.displayNameFor(provider.id, modelId)
+            // Agy без модели — валидно (модель по умолчанию в CLI).
+            val label = if (modelId.isBlank() && provider.isAgy) {
+                "agy · по умолчанию"
+            } else {
+                settings.displayNameFor(provider.id, modelId)
+            }
             _state.update {
                 it.copy(
-                    configured = modelId.isNotBlank(),
+                    configured = modelId.isNotBlank() || provider.isAgy,
                     providerName = provider.name,
                     modelDisplayName = label,
                     effort = effort,
@@ -215,8 +274,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     providers.map { p ->
                         async(Dispatchers.IO) {
                             try {
-                                val list = makeProvider(p).listModels()
-                                    .sortedBy { it.displayName.lowercase() }
+                                val list = if (p.isAgy) {
+                                    // Каталог из CLI (нужна авторизация), иначе фолбэк
+                                    // + выбранная вручную модель, чтобы не терялась.
+                                    val daemon = dev.merta.app.bridge.AgyDaemonClient(p.baseUrl)
+                                    val live = daemon.models()
+                                    val sel = settings.selectedModel(p.id)
+                                    val merged = (live + dev.merta.app.bridge.AgyModels.FALLBACK)
+                                        .distinctBy { it.id }
+                                    if (sel.isNotBlank() && merged.none { it.id == sel }) {
+                                        merged + LlmModel(sel, settings.displayNameFor(p.id, sel))
+                                    } else {
+                                        merged
+                                    }
+                                } else {
+                                    makeProvider(p).listModels()
+                                        .sortedBy { it.displayName.lowercase() }
+                                }
                                 ProviderGroup(p, list)
                             } catch (e: LlmException) {
                                 ProviderGroup(p, emptyList())
@@ -285,7 +359,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Выбери провайдера с ключом и модель — пузырь под заголовком."))
             return false
         }
-        if (settings.selectedModel(provider.id).isBlank()) {
+        if (settings.selectedModel(provider.id).isBlank() && !provider.isAgy) {
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Выбери модель — пузырь под заголовком."))
             return false
         }
@@ -328,6 +402,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         val client = makeProvider(provider) as OpenAiCompatClient
         val effort = settings.load().effort
+        if (provider.isAgy) {
+            startAgyTurn(provider, transcript, effort)
+            return
+        }
         val registry = toolRegistry()
         currentThoughtId = null
         _state.update { it.copy(sending = true, streaming = "") }
@@ -401,6 +479,113 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (thought != null) {
             finishThought(thought, now - currentThoughtStart)
+        }
+    }
+
+    /** conversation_id agy по сессиям чата (память между ходов — резум беседы). */
+    private val agyConversations = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    fun agyProvider(): Provider? = settings.loadProviders().find { it.isAgy }
+
+    /**
+     * Ход через Antigravity CLI (демон в proot).
+     * Контекст держит сам agy (resume по conversation_id): первый ход шлём
+     * system + вопрос, дальше — только новые вопросы. Каждый tool-шаг agy —
+     * отдельным пузырём, как в openai-ветке.
+     */
+    private fun startAgyTurn(provider: Provider, transcript: List<TurnMessage>, effort: String?) {
+        val lastUser = transcript.lastOrNull { it.role == "user" }?.content?.trim().orEmpty()
+        if (lastUser.isEmpty()) return
+        val sessionId = _state.value.sessionId
+        val system = transcript.firstOrNull { it.role == "system" }?.content.orEmpty()
+        val convId = agyConversations[sessionId]
+        val prompt = if (convId == null && system.isNotBlank()) "$system\n\n$lastUser" else lastUser
+        val model = settings.selectedModel(provider.id).ifBlank { null }
+        val dirs = scopeState.value?.allowedRoots
+            ?.filter { it.startsWith("/") && !it.startsWith("content://") } ?: emptyList()
+        val daemon = dev.merta.app.bridge.AgyDaemonClient(provider.baseUrl)
+        currentThoughtId = null
+        _state.update { it.copy(sending = true, streaming = "") }
+        streamJob = viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    var thoughtOpened = false
+                    fun needThought() {
+                        if (!thoughtOpened) {
+                            thoughtOpened = true
+                            newTurn()
+                        }
+                    }
+                    daemon.runStream(
+                        dev.merta.app.bridge.AgyDaemonClient.AgyRun(
+                            prompt = prompt,
+                            conversationId = convId,
+                            model = model,
+                            effort = effort,
+                            yolo = settings.loadAutoApprove(),
+                            dirs = dirs,
+                        ),
+                    ) { ev ->
+                        when (ev) {
+                            is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Init -> {
+                                if (ev.conversationId.isNotBlank()) {
+                                    agyConversations[sessionId] = ev.conversationId
+                                }
+                            }
+                            is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Delta -> {
+                                needThought()
+                                _state.update { s -> s.copy(streaming = (s.streaming ?: "") + ev.text) }
+                            }
+                            is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Tool -> {
+                                needThought()
+                                sealTurn()
+                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "⚙ " + ev.label))
+                                thoughtOpened = false
+                            }
+                            is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Done -> {
+                                needThought()
+                                if (ev.conversationId.isNotBlank()) {
+                                    agyConversations[sessionId] = ev.conversationId
+                                }
+                                // Стрим уже показал текст — дубли не пушим, только новое.
+                                val streamed = _state.value.streaming.orEmpty()
+                                val r = ev.response.trim()
+                                sealTurn()
+                                if (r.isNotBlank()) {
+                                    val probe = r.take(60)
+                                    if (streamed.isBlank()) {
+                                        push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, r))
+                                    } else if (!streamed.contains(probe) && !r.contains(streamed.take(60).trim())) {
+                                        push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, r))
+                                    }
+                                }
+                            }
+                            is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Error -> {
+                                throw LlmException(-1, agyErrorText(ev.message))
+                            }
+                        }
+                    }
+                }
+                _state.update { it.copy(streaming = null, sending = false) }
+            } catch (e: LlmException) {
+                _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
+                if (e.status != CANCELLED) {
+                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
+                }
+                currentThoughtId?.let { finishThought(it, System.currentTimeMillis() - currentThoughtStart) }
+                currentThoughtId = null
+            }
+            persist()
+        }
+    }
+
+    private fun agyErrorText(raw: String): String {
+        val lower = raw.lowercase()
+        return when {
+            "authentication" in lower -> "agy: нужна авторизация — в Termux: proot-distro login …, затем agy (войти в аккаунт)."
+            "busy" in lower -> "agy: предыдущий запрос ещё идёт — дождись и повтори."
+            "недоступен" in lower -> raw
+            else -> "agy: $raw"
         }
     }
 
@@ -511,10 +696,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         cancelStream(keepPartial = false)
+        try {
+            dev.merta.app.adb.ShizukuOpsImpl(getApplication()).removePermissionListener(shizukuPermListener)
+        } catch (_: Exception) {
+        }
     }
 
     companion object {
         const val CANCELLED = -2
+        const val SHIZUKU_PERM_CODE = 5101
 
         /** Хвост reasoning, хранимый в Thought (память + JSON истории). */
         const val MAX_THOUGHT_CHARS = 4000

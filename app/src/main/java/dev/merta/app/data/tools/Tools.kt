@@ -10,6 +10,10 @@ object ToolDefs {
     const val GREP_SEARCH = "grep_search"
     const val WRITE_FILE = "write_file"
     const val RUN_COMMAND = "run_command"
+    const val INSTALL_APK = "install_apk"
+    const val LIST_PACKAGES = "list_packages"
+    const val TAP_SCREEN = "tap_screen"
+    const val SWIPE_SCREEN = "swipe_screen"
 
     data class Def(
         val name: String,
@@ -64,6 +68,39 @@ object ToolDefs {
                 "workdir" to "Рабочая папка (необязательно)",
             ),
             listOf("command"),
+            needsApproval = true,
+        ),
+        Def(
+            INSTALL_APK,
+            "Установить APK через Shizuku (pm install). Путь — только общий (/sdcard/…, положи файл в Download). Требует подтверждения.",
+            listOf("path" to "Путь к .apk в /sdcard/…"),
+            listOf("path"),
+            needsApproval = true,
+        ),
+        Def(
+            LIST_PACKAGES,
+            "Список установленных пакетов через Shizuku (подстрока-фильтр, пусто = все).",
+            listOf("filter" to "Подстрока пакета (необязательно)"),
+            listOf(),
+            needsApproval = false,
+        ),
+        Def(
+            TAP_SCREEN,
+            "Тап по экрану в координатах устройства через Shizuku. Требует подтверждения.",
+            listOf("x" to "X в пикселях", "y" to "Y в пикселях"),
+            listOf("x", "y"),
+            needsApproval = true,
+        ),
+        Def(
+            SWIPE_SCREEN,
+            "Свайп по экрану через Shizuku. Требует подтверждения.",
+            listOf(
+                "x1" to "Начальный X",
+                "y1" to "Начальный Y",
+                "x2" to "Конечный X",
+                "y2" to "Конечный Y",
+            ),
+            listOf("x1", "y1", "x2", "y2"),
             needsApproval = true,
         ),
     )

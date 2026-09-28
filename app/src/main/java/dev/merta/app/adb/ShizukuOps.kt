@@ -15,6 +15,8 @@ enum class ShizukuCommand(val template: String) {
     LIST_PACKAGES("pm list packages {filter}"),
     GRANT_PERMISSION("pm grant {pkg} {permission}"),
     DUMP_CRASH("dumpsys dropbox --print {tag}"),
+    TAP("input tap {x} {y}"),
+    SWIPE("input swipe {x1} {y1} {x2} {y2}"),
 }
 
 interface ShizukuOps {

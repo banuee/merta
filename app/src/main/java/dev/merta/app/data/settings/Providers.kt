@@ -3,7 +3,8 @@ package dev.merta.app.data.settings
 import dev.merta.app.data.llm.SseParser
 
 /**
- * Провайдер нейросети: именованный OpenAI-совместимый endpoint с ключом.
+ * Провайдер нейросети: именованный OpenAI-совместимый endpoint с ключом
+ * либо локальный демон Antigravity CLI (`kind == "agy"`, ключ не нужен).
  * Ключи живут только в EncryptedSharedPreferences (см. MertaSettings).
  */
 data class Provider(
@@ -11,13 +12,22 @@ data class Provider(
     val name: String,
     val baseUrl: String,
     val apiKey: String,
+    /** "openai" | "agy". */
+    val kind: String = Kind.OPENAI,
 ) {
-    val hasKey: Boolean get() = apiKey.isNotBlank()
+    val hasKey: Boolean get() = apiKey.isNotBlank() || kind == Kind.AGY
+    val isAgy: Boolean get() = kind == Kind.AGY
+
+    object Kind {
+        const val OPENAI = "openai"
+        const val AGY = "agy"
+    }
 }
 
 /**
  * Чистый JSON-кодек провайдеров и карты моделей — покрыт JVM-тестами.
- * Формат: `[{"id":"...","name":"...","baseUrl":"...","apiKey":"..."}]`,
+ * Формат: `[{"id":"...","name":"...","baseUrl":"...","apiKey":"...","kind":"openai"}]`
+ * (`kind` отсутствует у старых записей — считается "openai"),
  * модели: `{"providerId":{"modelId":"Display Name"}}`.
  */
 object ProviderJson {
@@ -29,7 +39,8 @@ object ProviderJson {
             sb.append("{\"id\":\"").append(SseParser.jsonEscape(p.id)).append('"')
                 .append(",\"name\":\"").append(SseParser.jsonEscape(p.name)).append('"')
                 .append(",\"baseUrl\":\"").append(SseParser.jsonEscape(p.baseUrl)).append('"')
-                .append(",\"apiKey\":\"").append(SseParser.jsonEscape(p.apiKey)).append("\"}")
+                .append(",\"apiKey\":\"").append(SseParser.jsonEscape(p.apiKey)).append('"')
+                .append(",\"kind\":\"").append(SseParser.jsonEscape(p.kind)).append("\"}")
         }
         return sb.append(']').toString()
     }
@@ -56,6 +67,8 @@ object ProviderJson {
                         name = SseParser.extractStringAfterKey(obj, "name", 0) ?: id,
                         baseUrl = SseParser.extractStringAfterKey(obj, "baseUrl", 0) ?: "",
                         apiKey = SseParser.extractStringAfterKey(obj, "apiKey", 0) ?: "",
+                        kind = SseParser.extractStringAfterKey(obj, "kind", 0)
+                            ?.takeIf { it == Provider.Kind.AGY } ?: Provider.Kind.OPENAI,
                     ),
                 )
             }

@@ -1,5 +1,8 @@
 package dev.merta.app.data.tools
 
+import dev.merta.app.adb.ShizukuCommand
+import dev.merta.app.adb.ShizukuOps
+import dev.merta.app.adb.ShizukuOpsImpl
 import dev.merta.app.data.workspace.FileGateway
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -7,12 +10,15 @@ import java.util.concurrent.TimeUnit
 /**
  * Выполнение инструментов. Чистые эвристики (поиск файлов, чтение кусками) —
  * в companion, покрыты JVM-тестами. Сам запуск — через FileGateway.
+ * Shizuku-инструменты (install/tap) — через [ShizukuOps], без него — ошибка.
  */
 class ToolRegistry(
     private val gateway: FileGateway,
     private val defaultWorkdir: String,
     /** Авто-разрешение деструктивных инструментов без диалога. */
     private val autoApprove: Boolean = false,
+    /** Привилегированные операции (null — Shizuku недоступен). */
+    private val shizuku: ShizukuOps? = null,
 ) {
 
     suspend fun execute(
@@ -31,6 +37,12 @@ class ToolRegistry(
                 ToolDefs.GREP_SEARCH -> grep(call.args("root"), call.args("pattern"))
                 ToolDefs.WRITE_FILE -> writeFile(call.args("path"), call.args("content"))
                 ToolDefs.RUN_COMMAND -> runCommand(call.args("command"), call.args("workdir", defaultWorkdir))
+                ToolDefs.INSTALL_APK -> installApk(call.args("path"))
+                ToolDefs.LIST_PACKAGES -> listPackages(call.args("filter"))
+                ToolDefs.TAP_SCREEN -> tapScreen(call.args("x"), call.args("y"))
+                ToolDefs.SWIPE_SCREEN -> swipeScreen(
+                    call.args("x1"), call.args("y1"), call.args("x2"), call.args("y2"),
+                )
                 else -> "error: неизвестный инструмент «${call.name}»"
             }
         } catch (e: Exception) {
@@ -166,6 +178,37 @@ class ToolRegistry(
         }
     }
 
+    private suspend fun installApk(path: String): String {
+        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
+        val r = ops.run(ShizukuCommand.INSTALL_APK, mapOf("apk" to path))
+        if (r.exitCode != 0) return "error: pm install: ${r.stderr.ifBlank { r.stdout }.take(500)}"
+        return if ("Success" in r.stdout) "ok: пакет установлен" else "pm install: ${r.stdout.take(500)}"
+    }
+
+    private suspend fun listPackages(filter: String): String {
+        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
+        val r = ops.run(ShizukuCommand.LIST_PACKAGES, mapOf("filter" to filter))
+        if (r.exitCode != 0) return "error: pm list: ${r.stderr.ifBlank { r.stdout }.take(500)}"
+        return r.stdout.ifBlank { "(пусто)" }.take(MAX_OUTPUT)
+    }
+
+    private suspend fun tapScreen(x: String, y: String): String {
+        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
+        val r = ops.run(ShizukuCommand.TAP, mapOf("x" to x, "y" to y))
+        if (r.exitCode != 0) return "error: tap: ${r.stderr.ifBlank { r.stdout }.take(300)}"
+        return "ok: тап $x,$y"
+    }
+
+    private suspend fun swipeScreen(x1: String, y1: String, x2: String, y2: String): String {
+        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
+        val r = ops.run(
+            ShizukuCommand.SWIPE,
+            mapOf("x1" to x1, "y1" to y1, "x2" to x2, "y2" to y2),
+        )
+        if (r.exitCode != 0) return "error: swipe: ${r.stderr.ifBlank { r.stdout }.take(300)}"
+        return "ok: свайп $x1,$y1 → $x2,$y2"
+    }
+
     companion object {
         const val MAX_READ = 100 * 1024L
         const val MAX_LIST = 300
@@ -180,12 +223,19 @@ class ToolRegistry(
             ToolDefs.GREP_SEARCH -> "Поиск «${call.arguments["pattern"]}» в ${call.arguments["root"]}"
             ToolDefs.WRITE_FILE -> "Записать ${call.arguments["path"]}"
             ToolDefs.RUN_COMMAND -> "Выполнить: ${call.arguments["command"]}"
+            ToolDefs.INSTALL_APK -> "Установить APK ${call.arguments["path"]}"
+            ToolDefs.LIST_PACKAGES -> "Пакеты: ${call.arguments["filter"]}"
+            ToolDefs.TAP_SCREEN -> "Тап ${call.arguments["x"]},${call.arguments["y"]}"
+            ToolDefs.SWIPE_SCREEN -> "Свайп ${call.arguments["x1"]},${call.arguments["y1"]} → ${call.arguments["x2"]},${call.arguments["y2"]}"
             else -> call.name
         }
 
         fun preview(call: ToolCall): String = when (call.name) {
             ToolDefs.WRITE_FILE -> (call.arguments["content"] ?: "").take(600)
             ToolDefs.RUN_COMMAND -> "cwd: ${(call.arguments["workdir"] ?: "").ifBlank { "(workspace)" }}"
+            ToolDefs.INSTALL_APK -> "apk: ${(call.arguments["path"] ?: "")}"
+            ToolDefs.TAP_SCREEN -> "x=${call.arguments["x"]}, y=${call.arguments["y"]}"
+            ToolDefs.SWIPE_SCREEN -> "от ${call.arguments["x1"]},${call.arguments["y1"]}"
             else -> ""
         }
 
