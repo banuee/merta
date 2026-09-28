@@ -120,6 +120,8 @@ fi
 say "перезапуск демона…"
 PIDF="$HOME/merta-agy.pid"
 [ -f "$PIDF" ] && kill -9 "$(cat "$PIDF")" 2>/dev/null
+# Зомби внутри proot (брекеты — чтобы pkill не убил сам себя).
+proot-distro login "$DISTRO" -- pkill -9 -f '[m]erta-agy-daemon' 2>/dev/null
 sleep 1
 rm -f "$PIDF"
 say "запуск демона…"

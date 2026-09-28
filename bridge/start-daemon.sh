@@ -13,6 +13,10 @@ if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
   echo "already running (pid $(cat "$PIDF"))"
   exit 0
 fi
+# Чистим зомби внутри proot (брекеты — чтобы pkill не убил сам себя).
+proot-distro login debian -- pkill -9 -f '[m]erta-agy-daemon' 2>/dev/null
+sleep 1
+rm -f "$PIDF"
 setsid nohup proot-distro login debian -- python3 /root/merta-agy/daemon.py \
   >>$HOME/merta-agy.log 2>&1 &
 echo $! > "$PIDF"
