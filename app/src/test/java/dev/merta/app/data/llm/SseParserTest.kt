@@ -57,4 +57,22 @@ class SseParserTest {
         val json = "{\"content\":\"" + SseParser.jsonEscape(raw) + "\"}"
         assertEquals(raw, SseParser.extractStringAfterKey(json, "content", 0))
     }
+
+    @Test
+    fun `extracts direct reasoning string`() {
+        val chunk = """{"choices":[{"delta":{"reasoning":"Let me think","content":"Hi"}}]}"""
+        assertEquals("Let me think", SseParser.extractReasoning(chunk))
+    }
+
+    @Test
+    fun `extracts reasoning_details text and summary`() {
+        val chunk = """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"step one"},{"type":"reasoning.summary","summary":"sum"}]}}]}"""
+        assertEquals("step onesum", SseParser.extractReasoning(chunk))
+    }
+
+    @Test
+    fun `returns null when no reasoning`() {
+        assertNull(SseParser.extractReasoning("""{"choices":[{"delta":{"content":"Hi"}}]}"""))
+        assertNull(SseParser.extractReasoning("""{"choices":[]}"""))
+    }
 }

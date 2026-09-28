@@ -15,7 +15,7 @@ class MertaSettings(context: Context) {
         val baseUrl: String = Presets.OPENROUTER,
         val apiKey: String = "",
         val model: String = "",
-        /** null = выкл, иначе low/medium/high (OpenRouter reasoning.effort). */
+        /** null = выкл, иначе low/medium/high (OpenRouter: reasoning.effort, остальные: reasoning_effort). */
         val effort: String? = null,
     ) {
         val isConfigured: Boolean get() = apiKey.isNotBlank() && model.isNotBlank()

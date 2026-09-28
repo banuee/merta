@@ -63,6 +63,7 @@ class AgentLoopTest {
             "m", transcript, null, registry,
             cb = object : OpenAiCompatClient.AgentCallbacks {
                 override fun onDelta(text: String) {}
+                override fun onReasoning(text: String) {}
                 override fun onToolStart(name: String, summary: String) {
                     toolsSeen.add(name)
                 }
@@ -84,5 +85,88 @@ class AgentLoopTest {
         server.takeRequest()
         val secondBody = server.takeRequest().body.readUtf8()
         assertTrue(secondBody.contains("secret-content"))
+    }
+
+    private fun quietCb(
+        toolsSeen: MutableList<String> = mutableListOf(),
+        reasoningSeen: MutableList<String> = mutableListOf(),
+    ) = object : OpenAiCompatClient.AgentCallbacks {
+        override fun onDelta(text: String) {}
+        override fun onReasoning(text: String) {
+            reasoningSeen.add(text)
+        }
+        override fun onToolStart(name: String, summary: String) {
+            toolsSeen.add(name)
+        }
+        override suspend fun onApproval(approval: PendingApproval): Boolean = true
+    }
+
+    @Test
+    fun `reasoning chunks go to onReasoning`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking \"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"hard\"}]}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ),
+        )
+        val client = OpenAiCompatClient(server.url("/v1").toString(), "k")
+        val reasoningSeen = mutableListOf<String>()
+        val text = client.runAgent(
+            "m", mutableListOf(TurnMessage("user", "hi")), null,
+            ToolRegistry(allowAll, tmp.parent!!), cb = quietCb(reasoningSeen = reasoningSeen),
+        )
+        assertEquals("done", text)
+        assertEquals(listOf("thinking ", "hard"), reasoningSeen)
+    }
+
+    @Test
+    fun `retries without effort on 400`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("""{"error":{"message":"reasoning.effort is not supported for this model"}}"""),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ),
+        )
+        val client = OpenAiCompatClient(server.url("/v1").toString(), "k")
+        val text = client.runAgent(
+            "m", mutableListOf(TurnMessage("user", "hi")), "high",
+            ToolRegistry(allowAll, tmp.parent!!), cb = quietCb(),
+        )
+        assertEquals("ok", text)
+        val firstBody = server.takeRequest().body.readUtf8()
+        assertTrue(firstBody.contains("reasoning_effort"))
+        val secondBody = server.takeRequest().body.readUtf8()
+        assertTrue(!secondBody.contains("reasoning"))
+    }
+
+    @Test
+    fun `retries without tools on 400`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("""{"error":{"message":"this model does not support tools"}}"""),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"plain\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ),
+        )
+        val client = OpenAiCompatClient(server.url("/v1").toString(), "k")
+        val toolsSeen = mutableListOf<String>()
+        val text = client.runAgent(
+            "m", mutableListOf(TurnMessage("user", "hi")), null,
+            ToolRegistry(allowAll, tmp.parent!!), cb = quietCb(toolsSeen = toolsSeen),
+        )
+        assertEquals("plain", text)
+        assertTrue(toolsSeen.isEmpty())
+        server.takeRequest()
+        val secondBody = server.takeRequest().body.readUtf8()
+        assertTrue(!secondBody.contains("\"tools\""))
     }
 }

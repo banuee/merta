@@ -59,6 +59,7 @@ class SessionStore(private val chatsDir: File) {
                         active = false,
                         startedMs = 0L,
                         steps = o.optString("text", "").lines().filter { it.isNotBlank() },
+                        reasoning = o.optString("reasoning", ""),
                         lastMs = o.optLong("thinkMs", -1L).takeIf { it >= 0 },
                     )
                 } else {
@@ -87,6 +88,7 @@ class SessionStore(private val chatsDir: File) {
                     .put("text", if (m.role == ChatMessage.Role.THINKING) m.thought?.steps?.joinToString("\n") ?: "" else m.text)
                 if (m.role == ChatMessage.Role.THINKING) {
                     o.put("thinkMs", m.thought?.lastMs ?: -1L)
+                    o.put("reasoning", m.thought?.reasoning ?: "")
                 }
                 arr.put(o)
             }

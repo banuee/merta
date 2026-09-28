@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Фаза 1: Direct LLM API (OpenRouter / OpenCode Zen, OpenAI-совместимые). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Доступ ко всем файлам: агент работает с обычными путями (/sdcard/...) через java.io.File.
+         Запрашивается из настроек (Папка → доступ); без него — только внутренняя папка и SAF. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <!-- OTA-обновления через GitHub Releases (та же система, что в metro-launcher). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

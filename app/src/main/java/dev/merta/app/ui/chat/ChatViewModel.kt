@@ -15,6 +15,7 @@ import dev.merta.app.data.settings.Provider
 import dev.merta.app.data.tools.PendingApproval
 import dev.merta.app.data.tools.ToolRegistry
 import dev.merta.app.data.workspace.FileGatewayImpl
+import dev.merta.app.data.workspace.WorkspaceScope
 import dev.merta.app.data.workspace.WorkspaceStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +67,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var currentTitle = "Новый чат"
     private var nextId = 1L
     private var approvalGate: CompletableDeferred<Boolean>? = null
+    /** Последний известный скоуп папок (для системного сообщения — модель должна знать все корни). */
+    private val scopeState = MutableStateFlow<WorkspaceScope?>(null)
 
     private fun toolRegistry(): ToolRegistry {
         val app = getApplication<Application>()
@@ -99,6 +102,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(sessionId = id) }
         refreshConfig()
         refreshSessions()
+        viewModelScope.launch {
+            WorkspaceStore(getApplication(), AgentFiles(getApplication()).workspaceDir.absolutePath)
+                .scopeFlow.collect { scopeState.value = it }
+        }
     }
 
     /** Перечитать конфиг (после настроек/пикеров). */
@@ -244,13 +251,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         // Транскрипт для API: системный промт + пользователь/ассистент
         // (SYSTEM-строки ленты — только отображение, в запрос не идут).
-        // К системному добавляем динамическую строку с рабочей папкой,
-        // чтобы модель знала абсолютный путь и резолвинг относительных.
+        // К системному добавляем динамический список разрешённых папок:
+        // модель обязана знать ВСЕ корни, иначе сидит только в дефолтной.
         val wsDir = AgentFiles(getApplication()).workspaceDir.absolutePath
+        val roots = scopeState.value?.allowedRoots?.takeIf { it.isNotEmpty() } ?: listOf(wsDir)
         val system = agentFiles.loadSystemPrompt() +
-            "\n\nРабочая папка: $wsDir. " +
+            "\n\nРазрешённые папки:\n" + roots.joinToString("\n") { "- $it" } +
+            "\nРабочая папка по умолчанию: $wsDir. " +
             "Относительные пути (hello.txt) резолвятся от неё; " +
-            "абсолютные — только внутри разрешённых папок."
+            "файлы в других разрешённых папках открывай по АБСОЛЮТНОМУ пути. " +
+            "Сначала list_dir по нужной папке — не выдумывай содержимое."
         val transcript = mutableListOf<TurnMessage>()
         if (system.isNotBlank()) transcript.add(TurnMessage("system", system))
         transcript.addAll(
@@ -280,9 +290,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                 _state.update { s -> s.copy(streaming = (s.streaming ?: "") + text) }
                             }
 
+                            override fun onReasoning(text: String) {
+                                appendReasoning(thoughtId, text)
+                            }
+
                             override fun onToolStart(name: String, summary: String) {
-                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "\u2699 " + summary))
-                                addThinkStep(thoughtId, "\u2699 " + summary)
+                                // Tool-вызов виден своим пузырём — в Thought не дублируем.
+                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "⚙ " + summary))
                             }
 
                             override suspend fun onApproval(approval: PendingApproval): Boolean {
@@ -390,6 +404,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Доклеить кусок reasoning-стрима в Thought (с обрезкой хвоста). */
+    private fun appendReasoning(thoughtId: Long, chunk: String) {
+        _state.update { st ->
+            st.copy(
+                messages = st.messages.map { m ->
+                    if (m.id == thoughtId && m.thought != null) {
+                        m.copy(thought = m.thought.copy(reasoning = (m.thought.reasoning + chunk).takeLast(MAX_THOUGHT_CHARS)))
+                    } else {
+                        m
+                    }
+                },
+            )
+        }
+    }
+
     private fun push(msg: ChatMessage) {
         _state.update { it.copy(messages = it.messages + msg) }
     }
@@ -402,5 +431,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         const val CANCELLED = -2
+
+        /** Хвост reasoning, хранимый в Thought (память + JSON истории). */
+        const val MAX_THOUGHT_CHARS = 4000
     }
 }

@@ -21,6 +21,78 @@ object SseParser {
         return extractStringAfterKey(chunkJson, "content", deltaIdx)
     }
 
+    /**
+     * Вытаскивает кусок размышлений модели из одного чанка:
+     * - `choices[0].delta.reasoning` (строка — DeepSeek-R1 style через OpenRouter),
+     * - `choices[0].delta.reasoning_details[]` (объекты `reasoning.text` → `text`,
+     *   `reasoning.summary` → `summary`).
+     * @return склеенный кусок или null, если чанк без размышлений.
+     */
+    fun extractReasoning(chunkJson: String): String? {
+        val deltaIdx = chunkJson.indexOf("\"delta\"")
+        if (deltaIdx < 0) return null
+        val out = StringBuilder()
+        // Прямое строковое поле reasoning (indexOf с кавычками не цепляет reasoning_details).
+        extractStringAfterKey(chunkJson, "reasoning", deltaIdx)?.let {
+            if (it.isNotEmpty()) out.append(it)
+        }
+        // reasoning_details: собираем text/summary всех объектов массива.
+        var rdIdx = chunkJson.indexOf("\"reasoning_details\"", deltaIdx)
+        while (rdIdx >= 0) {
+            val arrStart = chunkJson.indexOf('[', rdIdx)
+            val arrEnd = if (arrStart < 0) null else matchSquare(chunkJson, arrStart)
+            if (arrEnd == null) break
+            var i = arrStart
+            while (true) {
+                val tIdx = chunkJson.indexOf("\"text\"", i)
+                if (tIdx < 0 || tIdx >= arrEnd) break
+                extractStringAfterKey(chunkJson, "text", i)?.let {
+                    if (it.isNotEmpty()) out.append(it)
+                }
+                i = tIdx + 6
+            }
+            var j = arrStart
+            while (true) {
+                val sIdx = chunkJson.indexOf("\"summary\"", j)
+                if (sIdx < 0 || sIdx >= arrEnd) break
+                extractStringAfterKey(chunkJson, "summary", j)?.let {
+                    if (it.isNotEmpty()) out.append(it)
+                }
+                j = sIdx + 9
+            }
+            rdIdx = chunkJson.indexOf("\"reasoning_details\"", arrEnd)
+        }
+        return out.toString().takeIf { it.isNotEmpty() }
+    }
+
+    /** Парная квадратная скобка к [openIdx] с учётом строк. null — нет пары. */
+    private fun matchSquare(json: String, openIdx: Int): Int? {
+        var depth = 0
+        var inStr = false
+        var i = openIdx
+        while (i < json.length) {
+            val c = json[i]
+            if (inStr) {
+                if (c == '\\') {
+                    i += 2
+                    continue
+                }
+                if (c == '"') inStr = false
+            } else {
+                when (c) {
+                    '"' -> inStr = true
+                    '[' -> depth++
+                    ']' -> {
+                        depth--
+                        if (depth == 0) return i + 1
+                    }
+                }
+            }
+            i++
+        }
+        return null
+    }
+
     /** Вытаскивает `error.message` из тела неуспешного ответа. */
     fun extractErrorMessage(errorJson: String): String? {
         val errIdx = errorJson.indexOf("\"error\"")

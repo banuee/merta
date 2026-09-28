@@ -2,6 +2,9 @@ package dev.merta.app.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -34,6 +37,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
@@ -70,6 +77,20 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     var systemPrompt by remember { mutableStateOf(agentFiles.loadSystemPrompt()) }
+    var manualPath by remember { mutableStateOf("") }
+    var resumeTick by remember { mutableStateOf(0) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) resumeTick++
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+    // All-files доступ нужен для обычных путей (/sdcard/...) — без него только внутренняя папка.
+    val hasAllFiles = remember(resumeTick) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager() else true
+    }
     val agentStatus = remember { agentFiles.status() }
     val ws by workspace.scopeFlow.collectAsState(initial = null)
     val activeProvider = remember { settings.activeProvider() }
@@ -238,6 +259,31 @@ fun SettingsScreen(
                 }
             }
         }
+        if (!hasAllFiles) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+                    .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                    .background(scheme.red.copy(alpha = 0.85f))
+                    .metroClickable(targetScale = 0.97f) {
+                        try {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    Uri.parse("package:" + context.packageName),
+                                ),
+                            )
+                        } catch (_: Exception) {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        }
+                    }
+                    .padding(vertical = 12.dp),
+            ) {
+                Text("ДОСТУП КО ВСЕМ ФАЙЛАМ", fontFamily = MetroFonts.text, fontSize = 14.sp, letterSpacing = 1.5.sp, color = Color.White)
+            }
+        }
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
@@ -250,6 +296,40 @@ fun SettingsScreen(
         ) {
             Text("+ ДОБАВИТЬ ПАПКУ", fontFamily = MetroFonts.text, fontSize = 14.sp, letterSpacing = 1.5.sp, color = scheme.text)
         }
+        Spacer(Modifier.height(6.dp))
+        MetroField(
+            value = manualPath,
+            onChange = { manualPath = it },
+            hint = "/sdcard/Download/code…",
+        )
+        Spacer(Modifier.height(6.dp))
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                .background(scheme.glassHover)
+                .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                .metroClickable(targetScale = 0.97f) {
+                    val p = manualPath.trim()
+                    if (p.isNotEmpty() && !p.startsWith("content://")) {
+                        scope.launch {
+                            workspace.addRoot(p)
+                            manualPath = ""
+                        }
+                    }
+                }
+                .padding(vertical = 12.dp),
+        ) {
+            Text("+ ДОБАВИТЬ ПУТЬ", fontFamily = MetroFonts.text, fontSize = 14.sp, letterSpacing = 1.5.sp, color = scheme.text)
+        }
+        Text(
+            "Внутренняя папка видна только приложению — для работы с проводником добавь /sdcard/… и выдай доступ.",
+            fontFamily = MetroFonts.text,
+            fontSize = 12.sp,
+            color = scheme.textDim,
+            modifier = Modifier.padding(top = 6.dp),
+        )
         Text(
             "Запрещено: " + (ws?.deniedPatterns?.joinToString() ?: "…"),
             fontFamily = MetroFonts.text,

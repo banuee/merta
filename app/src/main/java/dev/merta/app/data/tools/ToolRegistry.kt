@@ -40,6 +40,19 @@ class ToolRegistry(
         arguments[key] ?: default
 
     /**
+     * SAF-деревья (`content://`) через java.io.File не открываются в принципе
+     * (а shell в них нельзя положить cwd) — вместо невнятного «не файл»
+     * возвращаем честную ошибку с подсказкой.
+     */
+    private fun safError(path: String): String? =
+        if (path.startsWith("content://")) {
+            "error: SAF-папка (content://) файловыми инструментами не читается — " +
+                "добавь обычный путь к папке в Параметрах (и выдай доступ ко всем файлам)"
+        } else {
+            null
+        }
+
+    /**
      * Резолвинг пути: пустой (для папок) и относительный — от рабочей папки.
      * Модели любят писать `hello.txt` вместо абсолюта — не роняем, а чиним.
      */
@@ -52,6 +65,7 @@ class ToolRegistry(
     private suspend fun readFile(path: String): String {
         val p = resolvePath(path)
         if (p.isBlank()) return "error: пустой path"
+        safError(p)?.let { return it }
         gateway.check(p, write = false)?.let { return "error: $it" }
         val f = File(p)
         if (!f.isFile) return "error: не файл: $p"
@@ -61,6 +75,7 @@ class ToolRegistry(
 
     private suspend fun listDir(path: String): String {
         val p = resolvePath(path).ifBlank { defaultWorkdir }
+        safError(p)?.let { return it }
         gateway.check(p, write = false)?.let { return "error: $it" }
         val dir = File(p)
         if (!dir.isDirectory) return "error: не папка: $p"
@@ -73,6 +88,7 @@ class ToolRegistry(
     private suspend fun grep(root: String, pattern: String): String {
         if (pattern.isBlank()) return "error: пустой pattern"
         val base = resolvePath(root).ifBlank { defaultWorkdir }
+        safError(base)?.let { return it }
         gateway.check(base, write = false)?.let { return "error: $it" }
         val hits = mutableListOf<String>()
         var scanned = 0
@@ -109,6 +125,7 @@ class ToolRegistry(
     private suspend fun writeFile(path: String, content: String): String {
         val p = resolvePath(path)
         if (p.isBlank()) return "error: пустой path"
+        safError(p)?.let { return it }
         gateway.check(p, write = true)?.let { return "error: $it" }
         val f = File(p)
         f.parentFile?.mkdirs()
@@ -120,6 +137,7 @@ class ToolRegistry(
         if (command.isBlank()) return "error: пустая команда"
         SafetyDenyList.blocked(command)?.let { return "error: $it" }
         val dir = resolvePath(workdir).ifBlank { defaultWorkdir }
+        safError(dir)?.let { return it }
         gateway.check(dir, write = true)?.let { return "error: рабочая папка: $it" }
         val dirFile = File(dir)
         if (!dirFile.isDirectory) return "error: нет папки: $dir"

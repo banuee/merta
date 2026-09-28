@@ -64,9 +64,30 @@ class OpenAiCompatClientTest {
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody("data: [DONE]\n\n"),
         )
+        // Мок-сервер — не OpenRouter: шлём плоский reasoning_effort.
         client().streamChat(LlmRequest("m", emptyList(), "high")) {}
         val body = server.takeRequest().body.readUtf8()
-        assertTrue(body.contains("\"reasoning\":{\"effort\":\"high\"}"))
+        assertTrue(body.contains("\"reasoning_effort\":\"high\""))
+        assertTrue(!body.contains("\"reasoning\":{"))
+    }
+
+    @Test
+    fun `openrouter style nests reasoning effort`() {
+        val fields = OpenAiCompatClient.effortFields("high", openRouterStyle = true)
+        assertEquals(",\"reasoning\":{\"effort\":\"high\",\"exclude\":false}", fields)
+    }
+
+    @Test
+    fun `compat style uses flat reasoning_effort`() {
+        val fields = OpenAiCompatClient.effortFields("low", openRouterStyle = false)
+        assertEquals(",\"reasoning_effort\":\"low\"", fields)
+    }
+
+    @Test
+    fun `effort fields empty when off`() {
+        assertEquals("", OpenAiCompatClient.effortFields(null, openRouterStyle = true))
+        assertEquals("", OpenAiCompatClient.effortFields(null, openRouterStyle = false))
+        assertEquals("", OpenAiCompatClient.effortFields("", openRouterStyle = false))
     }
 
     @Test

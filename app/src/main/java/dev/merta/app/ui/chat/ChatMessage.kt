@@ -4,7 +4,10 @@ package dev.merta.app.ui.chat
 data class ThoughtData(
     val active: Boolean,
     val startedMs: Long,
+    /** Прогресс не-текстовых событий (ожидание approve и т.п.). Tool-вызовы сюда НЕ пишутся — у них свои пузыри. */
     val steps: List<String> = emptyList(),
+    /** Накопленный reasoning-стрим модели (может быть пустым — не все модели его отдают). */
+    val reasoning: String = "",
     /** Длительность завершённого мышления, мс. */
     val lastMs: Long? = null,
 )

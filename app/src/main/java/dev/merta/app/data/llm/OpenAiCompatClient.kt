@@ -79,6 +79,10 @@ class OpenAiCompatClient(
     /** Колбэки агентного цикла (UI решает approve, показывает прогресс). */
     interface AgentCallbacks {
         fun onDelta(text: String)
+
+        /** Кусок размышлений модели (reasoning-стрим) — UI копит в Thought. */
+        fun onReasoning(text: String)
+
         fun onToolStart(name: String, summary: String)
         suspend fun onApproval(approval: PendingApproval): Boolean
     }
@@ -86,7 +90,11 @@ class OpenAiCompatClient(
     /**
      * Агентный цикл: ходы с tools, сборка tool_calls из SSE-фрагментов,
      * выполнение через [registry] (approve — через колбэк), возврат финального текста.
-     * Текстовые дельты всех ходов стримятся через onDelta.
+     * Текстовые дельты всех ходов стримятся через onDelta, размышления — через onReasoning.
+     *
+     * Устойчивость к капризным провайдерам: если endpoint отвечает 400 на effort
+     * (модель без reasoning) или на tools (модель без function calling) — ход
+     * повторяется без спорного параметра вместо ошибки в лицо.
      */
     suspend fun runAgent(
         model: String,
@@ -97,19 +105,35 @@ class OpenAiCompatClient(
         cb: AgentCallbacks,
     ): String {
         val totalText = StringBuilder()
-        repeat(maxTurns) {
-            val turn = postAgentTurn(model, transcript, effort, cb::onDelta)
-            if (turn.text.isNotBlank()) {
-                totalText.append(turn.text)
+        var effortCur = effort
+        var toolsCur = true
+        var turn = 0
+        while (turn < maxTurns) {
+            val t = try {
+                postAgentTurn(model, transcript, effortCur, toolsCur, cb::onDelta, cb::onReasoning)
+            } catch (e: LlmException) {
+                val msg = e.message ?: ""
+                if (e.status == 400 && effortCur != null && mentionsReasoning(msg)) {
+                    effortCur = null
+                    continue
+                }
+                if (e.status == 400 && toolsCur && mentionsTools(msg)) {
+                    toolsCur = false
+                    continue
+                }
+                throw e
             }
-            if (turn.toolCalls.isEmpty()) {
-                if (turn.text.isNotBlank()) {
-                    transcript.add(TurnMessage("assistant", turn.text))
+            if (t.text.isNotBlank()) {
+                totalText.append(t.text)
+            }
+            if (t.toolCalls.isEmpty() || !toolsCur) {
+                if (t.text.isNotBlank()) {
+                    transcript.add(TurnMessage("assistant", t.text))
                 }
                 return totalText.toString()
             }
-            transcript.add(TurnMessage("assistant", turn.text, turn.toolCalls))
-            for (tc in turn.toolCalls) {
+            transcript.add(TurnMessage("assistant", t.text, t.toolCalls))
+            for (tc in t.toolCalls) {
                 val def = ToolDefs.byName(tc.name)
                 val args = parseArgs(tc.argumentsJson, def?.params?.map { it.first } ?: emptyList())
                 cb.onToolStart(tc.name, ToolRegistry.summary(dev.merta.app.data.tools.ToolCall(tc.id, tc.name, args)))
@@ -118,6 +142,7 @@ class OpenAiCompatClient(
                 ) { approval -> cb.onApproval(approval) }
                 transcript.add(TurnMessage("tool", output, toolCallId = tc.id))
             }
+            turn++
         }
         return totalText.toString()
     }
@@ -128,10 +153,12 @@ class OpenAiCompatClient(
         model: String,
         transcript: List<TurnMessage>,
         effort: String?,
+        includeTools: Boolean,
         onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit,
     ): AgentTurn {
         val url = baseUrl.trimEnd('/') + "/chat/completions"
-        val body = buildAgentBody(model, transcript, effort)
+        val body = buildAgentBody(model, transcript, effort, includeTools)
         val reqBuilder = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $apiKey")
@@ -164,6 +191,10 @@ class OpenAiCompatClient(
                     if (!delta.isNullOrEmpty()) {
                         full.append(delta)
                         onDelta(delta)
+                    }
+                    val reasoning = SseParser.extractReasoning(payload)
+                    if (!reasoning.isNullOrEmpty()) {
+                        onReasoning(reasoning)
                     }
                     for (frag in ToolCallsJson.extractFrags(payload)) {
                         val acc = frags.getOrPut(frag.index) { FragAcc() }
@@ -201,14 +232,24 @@ class OpenAiCompatClient(
         return out
     }
 
-    private fun buildAgentBody(model: String, transcript: List<TurnMessage>, effort: String?): String {
+    private fun effortFields(effort: String?): String =
+        effortFields(effort, isOpenRouter())
+
+    private fun isOpenRouter(): Boolean = baseUrl.lowercase().contains("openrouter")
+
+    private fun buildAgentBody(
+        model: String,
+        transcript: List<TurnMessage>,
+        effort: String?,
+        includeTools: Boolean,
+    ): String {
         val sb = StringBuilder()
         sb.append("{\"model\":\"").append(SseParser.jsonEscape(model)).append('"')
         sb.append(",\"stream\":true")
-        if (!effort.isNullOrBlank()) {
-            sb.append(",\"reasoning\":{\"effort\":\"").append(SseParser.jsonEscape(effort)).append("\"}")
+        sb.append(effortFields(effort))
+        if (includeTools) {
+            sb.append(",\"tools\":").append(ToolDefs.toolsJson())
         }
-        sb.append(",\"tools\":").append(ToolDefs.toolsJson())
         sb.append(",\"messages\":[")
         transcript.forEachIndexed { i, m ->
             if (i > 0) sb.append(',')
@@ -322,10 +363,7 @@ class OpenAiCompatClient(
         val sb = StringBuilder()
         sb.append("{\"model\":\"").append(SseParser.jsonEscape(request.model)).append('"')
         sb.append(",\"stream\":true")
-        // Уровень рассуждений (OpenRouter `reasoning.effort`, low/medium/high).
-        if (!request.effort.isNullOrBlank()) {
-            sb.append(",\"reasoning\":{\"effort\":\"").append(SseParser.jsonEscape(request.effort)).append("\"}")
-        }
+        sb.append(effortFields(request.effort))
         // tools добавит фаза 2; includeTools зарезервирован под retry-ветку.
         sb.append(",\"messages\":[")
         request.messages.forEachIndexed { i, m ->
@@ -347,8 +385,30 @@ class OpenAiCompatClient(
             )
     }
 
+    private fun mentionsReasoning(errBody: String): Boolean {
+        val lower = errBody.lowercase()
+        return lower.contains("reasoning") || lower.contains("effort")
+    }
+
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * Поля уровня рассуждений для тела запроса.
+         * OpenRouter понимает вложенный `reasoning.effort` (exclude:false — чтобы
+         * reasoning-токены возвращались и стримились в Thought); остальные
+         * OpenAI-совместимые (Zen и кастом) — плоский `reasoning_effort` из
+         * нативного Chat Completions API. Пусто — effort выключен.
+         */
+        internal fun effortFields(effort: String?, openRouterStyle: Boolean): String {
+            if (effort.isNullOrBlank()) return ""
+            val e = SseParser.jsonEscape(effort)
+            return if (openRouterStyle) {
+                ",\"reasoning\":{\"effort\":\"$e\",\"exclude\":false}"
+            } else {
+                ",\"reasoning_effort\":\"$e\""
+            }
+        }
 
         /** Заголовки для OpenRouter (ранжирование + политика бесплатных моделей). */
         fun openRouterHeaders(): Map<String, String> = mapOf(
