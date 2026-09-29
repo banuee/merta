@@ -106,9 +106,12 @@ class MertaSettings(context: Context) {
         val raw = prefs.getString(KEY_PROVIDERS, null)
         if (raw != null) {
             val stored = ProviderJson.providersFromJson(raw).toMutableList()
-            if (stored.none { it.isAgy }) {
-                stored.add(Provider("agy", "Agy", Presets.AGY_DAEMON, "", Provider.Kind.AGY))
-                saveProviders(stored)
+            if (!prefs.getBoolean(KEY_AGY_MIGRATED, false)) {
+                prefs.edit().putBoolean(KEY_AGY_MIGRATED, true).apply()
+                if (stored.none { it.isAgy }) {
+                    stored.add(Provider("agy", "Agy", Presets.AGY_DAEMON, "", Provider.Kind.AGY))
+                    saveProviders(stored)
+                }
             }
             return stored
         }
@@ -131,7 +134,7 @@ class MertaSettings(context: Context) {
             )
         }
         saveProviders(seeded)
-        prefs.edit().putString(KEY_ACTIVE_PROVIDER, seeded.first().id).apply()
+        prefs.edit().putBoolean(KEY_AGY_MIGRATED, true).putString(KEY_ACTIVE_PROVIDER, seeded.first().id).apply()
         return seeded
     }
 
@@ -226,6 +229,7 @@ class MertaSettings(context: Context) {
         private const val KEY_PRICING = "llm_pricing_cache"
         private const val KEY_SELECTED = "llm_selected_models"
         private const val KEY_AUTO_APPROVE = "agent_auto_approve"
+        private const val KEY_AGY_MIGRATED = "llm_agy_migrated"
 
         private fun slugFor(baseUrl: String): String {
             val u = baseUrl.trimEnd('/').lowercase()

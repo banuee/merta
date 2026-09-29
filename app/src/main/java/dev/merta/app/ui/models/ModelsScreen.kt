@@ -1,5 +1,6 @@
 package dev.merta.app.ui.models
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -58,6 +59,14 @@ fun ModelsScreen(
     val scheme = LocalMetroScheme.current
     val ui by vm.state.collectAsState()
     var filter by remember { mutableStateOf("") }
+
+    BackHandler {
+        if (filter.isNotEmpty()) {
+            filter = ""
+        } else {
+            onBack()
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (ui.groups.isEmpty() && ui.modelsError == null) vm.refreshModels()

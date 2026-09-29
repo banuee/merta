@@ -46,4 +46,27 @@ class ProviderJsonTest {
         val back = ProviderJson.modelsCacheFromJson(ProviderJson.modelsCacheToJson(cache))
         assertEquals(cache, back)
     }
+
+    @Test
+    fun `agy with token roundtrips correctly`() {
+        val agy = Provider("agy", "Agy", "http://127.0.0.1:18080", "secret-token-123", Provider.Kind.AGY)
+        val list = listOf(agy)
+        val back = ProviderJson.providersFromJson(ProviderJson.providersToJson(list))
+        assertEquals(1, back.size)
+        assertEquals("secret-token-123", back[0].apiKey)
+        assertEquals(Provider.Kind.AGY, back[0].kind)
+        assertTrue(back[0].hasKey)
+    }
+
+    @Test
+    fun `editing provider preserves identity`() {
+        val original = Provider("agy", "Agy", "http://127.0.0.1:18080", "", Provider.Kind.AGY)
+        val edited = original.copy(name = "Local Agy", baseUrl = "http://127.0.0.1:18081", apiKey = "tok123")
+        val back = ProviderJson.providersFromJson(ProviderJson.providersToJson(listOf(edited)))[0]
+        assertEquals("agy", back.id)
+        assertEquals("Local Agy", back.name)
+        assertEquals("http://127.0.0.1:18081", back.baseUrl)
+        assertEquals("tok123", back.apiKey)
+        assertEquals(Provider.Kind.AGY, back.kind)
+    }
 }

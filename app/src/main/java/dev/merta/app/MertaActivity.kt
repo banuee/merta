@@ -3,6 +3,7 @@ package dev.merta.app
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -17,6 +18,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -90,10 +92,34 @@ class MertaActivity : ComponentActivity() {
                     val workspace = remember {
                         WorkspaceStore(applicationContext)
                     }
-                    var route by remember {
-                        mutableStateOf(
-                            if (intent.getBooleanExtra("open_updates", false)) Route.SETTINGS else Route.CHAT,
-                        )
+                    val initialRoute = remember {
+                        if (intent.getBooleanExtra("open_updates", false)) Route.SETTINGS else Route.CHAT
+                    }
+                    val backStack = remember {
+                        mutableStateListOf<Route>().apply {
+                            add(Route.CHAT)
+                            if (initialRoute != Route.CHAT) add(initialRoute)
+                        }
+                    }
+                    val currentRoute = backStack.lastOrNull() ?: Route.CHAT
+
+                    fun navigateTo(next: Route) {
+                        if (backStack.lastOrNull() != next) {
+                            backStack.add(next)
+                        }
+                    }
+
+                    fun navigateBack(): Boolean {
+                        return if (backStack.size > 1) {
+                            backStack.removeAt(backStack.lastIndex)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    BackHandler(enabled = backStack.size > 1) {
+                        navigateBack()
                     }
                     // Пересоздаёт параметры/провайдеры после изменений списков.
                     var settingsTick by remember { mutableStateOf(0) }
@@ -101,7 +127,7 @@ class MertaActivity : ComponentActivity() {
 
                     // Плавные переходы между экранами (pop + fade в кривых Metro).
                     AnimatedContent(
-                        targetState = route,
+                        targetState = currentRoute,
                         transitionSpec = {
                             (fadeIn(animationSpec = androidx.compose.animation.core.tween(220, easing = dev.merta.app.ui.theme.MetroAnimations.OpenEasing)) +
                                 androidx.compose.animation.scaleIn(
@@ -116,11 +142,11 @@ class MertaActivity : ComponentActivity() {
                         when (target) {
                         Route.CHAT -> ChatScreen(
                             vm,
-                            onOpenSettings = { route = Route.SETTINGS },
+                            onOpenSettings = { navigateTo(Route.SETTINGS) },
                             onNewChat = {
                                 vm.newChat()
                             },
-                            onOpenModels = { route = Route.MODELS },
+                            onOpenModels = { navigateTo(Route.MODELS) },
                         )
                         Route.SETTINGS -> key(settingsTick) {
                             SettingsScreen(
@@ -131,9 +157,9 @@ class MertaActivity : ComponentActivity() {
                                 shizukuStatus = vm.shizukuStatus,
                                 onRefreshShizuku = { vm.refreshShizuku() },
                                 onRequestShizuku = { vm.requestShizukuPermission() },
-                                onOpenModels = { route = Route.MODELS },
-                                onOpenProviders = { route = Route.PROVIDERS },
-                                onBack = { route = Route.CHAT },
+                                onOpenModels = { navigateTo(Route.MODELS) },
+                                onOpenProviders = { navigateTo(Route.PROVIDERS) },
+                                onBack = { navigateBack() },
                                 onSaved = { vm.refreshConfig() },
                             )
                         }
@@ -143,9 +169,10 @@ class MertaActivity : ComponentActivity() {
                             currentModel = settings.selectedModel(settings.activeProviderId()),
                             onPick = { pid, mid ->
                                 vm.selectModel(pid, mid)
-                                route = Route.CHAT
+                                backStack.clear()
+                                backStack.add(Route.CHAT)
                             },
-                            onBack = { route = Route.CHAT },
+                            onBack = { navigateBack() },
                         )
                         Route.PROVIDERS -> key(providersTick) {
                             ProvidersScreen(
@@ -162,12 +189,17 @@ class MertaActivity : ComponentActivity() {
                                 vm.refreshConfig()
                                 providersTick++
                             },
+                            onEdit = { p ->
+                                settings.saveProviders(settings.loadProviders().map { if (it.id == p.id) p else it })
+                                vm.refreshConfig()
+                                providersTick++
+                            },
                             onDelete = { id ->
                                 settings.saveProviders(settings.loadProviders().filter { it.id != id })
                                 vm.refreshConfig()
                                 providersTick++
                             },
-                            onBack = { route = Route.SETTINGS },
+                            onBack = { navigateBack() },
                             )
                         }
                         }

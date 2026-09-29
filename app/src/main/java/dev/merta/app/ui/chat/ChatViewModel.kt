@@ -302,6 +302,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, hint))
         }
         _state.update { it.copy(autoApprove = settings.loadAutoApprove()) }
+        recheckDaemon()
     }
 
     fun toggleAutoApprove() {

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -45,11 +46,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.merta.app.data.agent.AgentFiles
 import dev.merta.app.data.settings.MertaSettings
+import dev.merta.app.data.settings.MertaSettings.Presets
 import dev.merta.app.data.wallpaper.WallpaperRepository
 import dev.merta.app.data.workspace.WorkspaceStore
 import dev.merta.app.adb.ShizukuOps
@@ -100,7 +103,12 @@ fun SettingsScreen(
     }
     val agentStatus = remember { agentFiles.status() }
     val ws by workspace.scopeFlow.collectAsState(initial = null)
-    val activeProvider = remember { settings.activeProvider() }
+    var providerTick by remember { mutableStateOf(0) }
+    val activeProvider = remember(resumeTick, providerTick) { settings.activeProvider() }
+    var showEditActive by remember { mutableStateOf(false) }
+    var editActiveName by remember(activeProvider?.id, showEditActive) { mutableStateOf(activeProvider?.name ?: "") }
+    var editActiveUrl by remember(activeProvider?.id, showEditActive) { mutableStateOf(activeProvider?.baseUrl ?: "") }
+    var editActiveKey by remember(activeProvider?.id, showEditActive) { mutableStateOf(activeProvider?.apiKey ?: "") }
     LaunchedEffect(Unit) { onRefreshShizuku() }
 
     val safLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
@@ -113,6 +121,14 @@ fun SettingsScreen(
         } catch (_: SecurityException) {
         }
         scope.launch { workspace.addRoot(uri.toString()) }
+    }
+
+    BackHandler {
+        if (showEditActive) {
+            showEditActive = false
+        } else {
+            onBack()
+        }
     }
 
     fun save() {
@@ -169,12 +185,23 @@ fun SettingsScreen(
                 fontSize = 16.sp,
                 color = scheme.text,
             )
+            val keyStatus = when {
+                activeProvider == null -> "провайдер не выбран"
+                activeProvider.isAgy && activeProvider.apiKey.isNotBlank() -> "токен введён"
+                activeProvider.isAgy -> "без токена (открытый демон)"
+                activeProvider.apiKey.isNotBlank() -> "ключ введён"
+                else -> "без ключа"
+            }
+            val keyColor = when {
+                activeProvider?.apiKey?.isNotBlank() == true -> scheme.accent
+                activeProvider?.isAgy == true -> scheme.textDim
+                else -> scheme.red
+            }
             Text(
-                (activeProvider?.baseUrl ?: "") + " · " +
-                    if (activeProvider?.hasKey == true) "ключ введён" else "без ключа",
+                (activeProvider?.baseUrl ?: "") + " · " + keyStatus,
                 fontFamily = MetroFonts.text,
                 fontSize = 12.sp,
-                color = scheme.textDim,
+                color = keyColor,
             )
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -201,6 +228,88 @@ fun SettingsScreen(
                         .padding(vertical = 10.dp),
                 ) {
                     Text("Провайдеры", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
+                }
+                if (activeProvider != null) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                            .background(if (showEditActive) scheme.accent.copy(alpha = 0.35f) else scheme.glassHover)
+                            .border(1.dp, if (showEditActive) scheme.accent else scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                            .metroClickable(targetScale = 0.97f, onClick = {
+                                editActiveName = activeProvider.name
+                                editActiveUrl = activeProvider.baseUrl
+                                editActiveKey = activeProvider.apiKey
+                                showEditActive = !showEditActive
+                            })
+                            .padding(vertical = 10.dp),
+                    ) {
+                        Text(if (showEditActive) "Свернуть" else "Изменить", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text)
+                    }
+                }
+            }
+
+            if (showEditActive && activeProvider != null) {
+                Spacer(Modifier.height(6.dp))
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                ) {
+                    MetroField(
+                        value = editActiveName,
+                        onChange = { editActiveName = it },
+                        hint = "Название",
+                    )
+                    MetroField(
+                        value = editActiveUrl,
+                        onChange = { editActiveUrl = it },
+                        hint = if (activeProvider.isAgy) Presets.AGY_DAEMON else "https://…/v1",
+                    )
+                    MetroField(
+                        value = editActiveKey,
+                        onChange = { editActiveKey = it },
+                        hint = if (activeProvider.isAgy) "Токен демона (если задан secret)" else "API-ключ",
+                        secret = true,
+                    )
+                    if (activeProvider.isAgy) {
+                        Text(
+                            text = "Токен демона показывает установщик ~/bin/merta-agy. Если демон открыт (без secret), оставь поле пустым.",
+                            fontFamily = MetroFonts.text,
+                            fontSize = 11.sp,
+                            color = scheme.textDim,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                                .background(scheme.accent.copy(alpha = 0.85f))
+                                .metroClickable(targetScale = 0.97f) {
+                                    if (editActiveName.isNotBlank() && editActiveUrl.isNotBlank()) {
+                                        val updated = activeProvider.copy(
+                                            name = editActiveName.trim(),
+                                            baseUrl = editActiveUrl.trim().trimEnd('/'),
+                                            apiKey = editActiveKey.trim(),
+                                        )
+                                        settings.saveProviders(
+                                            settings.loadProviders().map { if (it.id == updated.id) updated else it }
+                                        )
+                                        providerTick++
+                                        onSaved()
+                                        showEditActive = false
+                                    }
+                                }
+                                .padding(vertical = 10.dp),
+                        ) {
+                            Text("СОХРАНИТЬ", fontFamily = MetroFonts.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                        }
+                        MetroSmallButton("×") { showEditActive = false }
+                    }
                 }
             }
         }
@@ -454,6 +563,7 @@ private fun MetroField(
     onChange: (String) -> Unit,
     hint: String,
     minLines: Int = 1,
+    secret: Boolean = false,
 ) {
     val scheme = LocalMetroScheme.current
     Box(
@@ -469,7 +579,7 @@ private fun MetroField(
             onValueChange = onChange,
             textStyle = TextStyle(fontFamily = MetroFonts.text, fontSize = 15.sp, color = scheme.text),
             cursorBrush = SolidColor(scheme.accent),
-            visualTransformation = VisualTransformation.None,
+            visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
             singleLine = minLines == 1,
             minLines = minLines,
             modifier = Modifier.fillMaxWidth(),

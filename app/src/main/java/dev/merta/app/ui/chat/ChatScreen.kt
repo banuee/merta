@@ -1,5 +1,6 @@
 package dev.merta.app.ui.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -98,6 +99,10 @@ fun ChatScreen(
     LaunchedEffect(drawer) {
         if (drawer == Drawer.LEFT) vm.refreshSessions()
         if (drawer == Drawer.RIGHT && vm.isAgyActive()) vm.refreshQuota()
+    }
+
+    BackHandler(enabled = drawer != null) {
+        drawer = null
     }
 
     if (editing != null) {
