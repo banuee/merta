@@ -48,6 +48,13 @@ if [ -z "$AGY_BIN" ]; then
 fi
 PAGY="$(proot-distro login "$DISTRO" -- sh -c 'command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || ls /root/.agy-autopatch/bin/antigravity /root/.agy-autopatch/bin/agy 2>/dev/null' 2>/dev/null | head -1)"
 PPATCHER="$(proot-distro login "$DISTRO" -- sh -c 'command -v agy-autopatch 2>/dev/null' 2>/dev/null | head -1)"
+if [ -z "$PAGY" ]; then
+  say "глубокий поиск agy в proot…"
+  PAGY="$(proot-distro login "$DISTRO" -- find /root /home /usr/local /opt -maxdepth 4 \( -name agy -o -name antigravity \) -type f 2>/dev/null | head -1)"
+fi
+if [ -z "$PPATCHER" ]; then
+  PPATCHER="$(proot-distro login "$DISTRO" -- find /root /home /opt -maxdepth 5 -name agy-autopatch -type f 2>/dev/null | head -1)"
+fi
 # Пути из proot видны демону как есть (тот же корень).
 [ -n "$PAGY" ] && [ -z "$AGY_BIN" ] && AGY_BIN="$PAGY"
 say "agy: ${AGY_BIN:-НЕ НАЙДЕН}"
