@@ -8,6 +8,7 @@ export HOME=/data/data/com.termux/files/home
 export PREFIX=/data/data/com.termux/files/usr
 export LD_LIBRARY_PATH=$PREFIX/lib
 export PATH=$PREFIX/bin:$PREFIX/bin/applets:/system/bin:/system/xbin
+$PREFIX/bin/termux-wake-lock 2>/dev/null || true
 PIDF=$HOME/merta-agy.pid
 if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
   echo "already running (pid $(cat "$PIDF"))"

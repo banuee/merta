@@ -10,17 +10,26 @@
 - `start-daemon.sh` — старт из Termux (бэкграунд через setsid — иначе выход
   из login-сессии убивает демона).
 
-## Установка на телефоне (в proot, где стоят agy + agy-autopatch)
+## Установка на телефоне (Termux)
+
+Одна команда в Termux:
 
 ```bash
-mkdir -p /root/merta-agy
-# закинуть merta-agy-daemon.py в /root/merta-agy/ (adb push + cp, откровенно)
-cp /путь/к/start-daemon.sh ~/bin/merta-agy  # или руками
-chmod +x ~/bin/merta-agy
-~/bin/merta-agy   # проверит /status сам
+curl -fsSL https://raw.githubusercontent.com/banuee/merta/main/bridge/install-phone.sh | bash
 ```
 
-Проверка: `curl http://127.0.0.1:18080/status`.
+Установщик создаёт команду `merta` в `$PREFIX/bin`, запускает фоновый watchdog-супервизор, включает `termux-wake-lock` и отключает Android Phantom Process Killer.
+
+## Управление (из любого места в Termux)
+
+```bash
+merta         # статус / быстрый запуск
+merta restart # перезапуск демона и watchdog
+merta stop    # остановка демона и watchdog
+merta logs    # просмотр последних логов
+merta status  # проверка статуса
+merta fix-killer # отключить Android Phantom Process Killer через Shizuku
+```
 
 ## Автозапуск
 

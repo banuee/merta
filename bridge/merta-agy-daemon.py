@@ -101,7 +101,8 @@ def resolve_rish(cfg):
     if cfg.get("rish_bin") and os.path.isfile(cfg["rish_bin"]):
         return cfg["rish_bin"]
     thome = cfg.get("termux_home") or THOME
-    for p in (os.path.join(thome, "rish"),
+    for p in ("/data/data/com.termux/files/usr/bin/rish",
+              os.path.join(thome, "rish"),
               os.path.join(thome, "bin", "rish"),
               os.path.join(HOME, "rish")):
         if os.path.isfile(p):
@@ -116,6 +117,9 @@ def run_rish(cmd_text, timeout=60):
     всегда true) — зовём app_process напрямую, dex заранее chmod 400
     (на Android 14+ app_process не грузит записываемый dex).
     """
+    global RISH
+    if not RISH:
+        RISH = resolve_rish(CFG)
     if not RISH:
         return 99, "rish not found (run install-phone.sh, needs Shizuku setup)"
     if not cmd_text or not cmd_text.strip():
@@ -145,13 +149,16 @@ _rish_cache = [False, 0.0]
 
 
 def rish_probe():
+    global RISH
+    if not RISH:
+        RISH = resolve_rish(CFG)
     if not RISH:
         return False
     now = time.time()
-    if now - _rish_cache[1] < 60:
+    if now - _rish_cache[1] < 20:
         return _rish_cache[0]
     try:
-        rc, _ = run_rish("id", timeout=15)
+        rc, _ = run_rish("id", timeout=10)
         ok = (rc == 0)
         _rish_cache[0] = ok
         _rish_cache[1] = now
@@ -342,7 +349,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
-        if self.path == "/status":
+        if self.path == "/ping":
+            self._json({"ok": True, "pong": True, "time": time.time()})
+        elif self.path == "/status":
             code, out = run_patch_cmd(["check", "--quiet"], timeout=120)
             self._json({"ok": True, "agy_version": agy_version(),
                         "agy_bin": AGY, "creds_home": AGY_HOME,

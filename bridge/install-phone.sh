@@ -2,8 +2,9 @@
 # Установка демона merta-agy на телефоне. Одна команда в Termux:
 #   curl -fsSL https://raw.githubusercontent.com/banuee/merta/main/bridge/install-phone.sh | bash
 # Что делает: находит proot-дистрибутив, кладёт daemon.py в /root/merta-agy,
-# пишет ~/bin/merta-agy (старт), cron-keepalive в proot, boot-скрипт Termux,
-# запускает демона и показывает /status. Идемпотентно — можно повторять.
+# создаёт команду `merta` в $PREFIX/bin, watchdog-супервизор, termux-wake-lock,
+# отключает Android Phantom Process Killer через Shizuku (rish) и показывает статус.
+# Идемпотентно — можно запускать повторно.
 set -u
 REPO="https://raw.githubusercontent.com/banuee/merta/main/bridge"
 say() { printf '%s\n' "$*"; }
@@ -59,25 +60,37 @@ fi
 [ -n "$PAGY" ] && [ -z "$AGY_BIN" ] && AGY_BIN="$PAGY"
 say "agy: ${AGY_BIN:-НЕ НАЙДЕН}"
 say "патчер: ${PPATCHER:-не найден}"
-say "rish: проверка…"
+
+say "rish: поиск…"
 RISH=""; RISH_OK=0
-if [ "${MERTA_SKIP_RISH:-0}" = "1" ]; then
-  say "rish: пропущен (MERTA_SKIP_RISH=1)"
-else
-  [ -f "$HOME/rish" ] && chmod +x "$HOME/rish" 2>/dev/null
-  for c in "$HOME/rish" "$PREFIX/bin/rish"; do
-    if [ -f "$c" ]; then RISH="$c"; break; fi
-  done
-  if [ -n "$RISH" ]; then
+[ -f "$HOME/rish" ] && chmod +x "$HOME/rish" 2>/dev/null
+[ -f "$PREFIX/bin/rish" ] && chmod +x "$PREFIX/bin/rish" 2>/dev/null
+for c in "$HOME/rish" "$PREFIX/bin/rish"; do
+  if [ -f "$c" ]; then RISH="$c"; break; fi
+done
+if [ -n "$RISH" ]; then
+  if [ "${MERTA_SKIP_RISH:-0}" = "1" ]; then
+    say "rish: найден ($RISH), проверка пропущена (MERTA_SKIP_RISH=1)"
+  else
     # timeout обязателен: rish может зависнуть в ожидании Shizuku.
-    # setsid: если rish шлёт сигналы группе — умрёт только откреплённая группа.
-    if setsid timeout 25 "$RISH" -c 'id' </dev/null >/dev/null 2>&1 \
-       || setsid timeout 25 sh "$RISH" -c 'id' </dev/null >/dev/null 2>&1; then
+    if setsid timeout 8 "$RISH" -c 'id' </dev/null >/dev/null 2>&1 \
+       || setsid timeout 8 sh "$RISH" -c 'id' </dev/null >/dev/null 2>&1; then
       RISH_OK=1
     fi
   fi
 fi
 say "rish: ${RISH:-НЕ НАЙДЕН} (работает: $RISH_OK)"
+
+# Отключение Android Phantom Process Killer через rish (если доступен)
+if [ "$RISH_OK" = "1" ] && [ -n "$RISH" ]; then
+  say "отключаю Android Phantom Process Killer…"
+  setsid timeout 6 "$RISH" -c "/system/bin/device_config put activity_manager max_phantom_processes 2147483647; /system/bin/device_config set_sync_disabled_for_tests persistent; /system/bin/settings put global settings_enable_monitor_phantom_procs false" </dev/null >/dev/null 2>&1 || true
+fi
+
+# Включение Termux wake-lock (не даёт Android усыпить CPU)
+say "включаю termux-wake-lock (защита от засыпания CPU)…"
+$PREFIX/bin/termux-wake-lock 2>/dev/null || true
+
 # Секрет для /run /shell /patch (защита от чужих приложений).
 # Переиспользуем старый из конфига, чтобы токен в приложении не слетал.
 CFG="$ROOTFS/root/merta-agy/config.json"
@@ -87,7 +100,8 @@ if [ -z "$SECRET" ]; then
 fi
 say "токен демона: $SECRET"
 say "(вставь его в ключ agy-провайдера в приложении — один раз)"
-# config.json для демона (пустые значения — автопоиск).
+
+# config.json для демона
 {
   printf '{'
   printf '"agy_bin": "%s", ' "$AGY_BIN"
@@ -98,37 +112,162 @@ say "(вставь его в ключ agy-провайдера в приложе
   printf '}\n'
 } > "$CFG"
 
-# Точка входа ~/bin/merta-agy (старт + status).
-cat > "$HOME/bin/merta-agy" <<EOF
+# Watchdog скрипт в Termux: проверяет порт 18080 каждые 15 сек.
+# Если демон упал — поднимает заново и продлевает wake-lock.
+cat > "$HOME/bin/merta-watchdog" <<EOF
 #!/data/data/com.termux/files/usr/bin/bash
-# Старт/статус демона merta-agy (дистрибутив $DISTRO).
 export LD_LIBRARY_PATH="\$PREFIX/lib"
 PIDF="\$HOME/merta-agy.pid"
-if [ "\$1" = "status" ]; then
-  curl -fsS -m 90 http://127.0.0.1:18080/status; echo; exit \$?
-fi
-if [ -f "\$PIDF" ] && kill -0 "\$(cat "\$PIDF")" 2>/dev/null; then
-  echo "already running (pid \$(cat "\$PIDF"))"
-else
-  # Чистим только демона (паттерн daemon.py — лаунчер bin/merta-agy под него
-  # не попадает, суицида нет; брекеты — чтобы pkill не убил сам себя).
-  proot-distro login "$DISTRO" -- pkill -9 -f '[d]aemon\.py' 2>/dev/null
-  sleep 1
-  rm -f "\$PIDF"
-  setsid nohup proot-distro login "$DISTRO" -- python3 /root/merta-agy/daemon.py \\
-    >>"\$HOME/merta-agy.log" 2>&1 &
-  echo \$! > "\$PIDF"
-  sleep 2
-fi
-curl -fsS -m 120 http://127.0.0.1:18080/status; echo
-EOF
-chmod +x "$HOME/bin/merta-agy"
+LOGF="\$HOME/merta-agy.log"
+WLOGF="\$HOME/merta-watchdog.log"
 
-# Keepalive в proot cron (если есть cron/crontab).
+while true; do
+  sleep 15
+  if ! curl -fsS -m 4 http://127.0.0.1:18080/ping >/dev/null 2>&1 \
+     && ! curl -fsS -m 5 http://127.0.0.1:18080/status >/dev/null 2>&1; then
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Демон упал или завис! Перезапускаю..." >> "\$WLOGF"
+    \$PREFIX/bin/termux-wake-lock 2>/dev/null || true
+    proot-distro login "$DISTRO" -- pkill -9 -f '[d]aemon\.py' 2>/dev/null || true
+    sleep 1
+    rm -f "\$PIDF"
+    setsid nohup proot-distro login "$DISTRO" -- python3 /root/merta-agy/daemon.py >>"\$LOGF" 2>&1 &
+    echo \$! > "\$PIDF"
+    sleep 4
+  fi
+done
+EOF
+chmod +x "$HOME/bin/merta-watchdog"
+
+# Главный скрипт управления: ~/bin/merta (и симлинк в $PREFIX/bin/merta)
+cat > "$HOME/bin/merta" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+# Управление демоном merta-agy (дистрибутив $DISTRO).
+export LD_LIBRARY_PATH="\$PREFIX/lib"
+PIDF="\$HOME/merta-agy.pid"
+WPIDF="\$HOME/merta-watchdog.pid"
+LOGF="\$HOME/merta-agy.log"
+WLOGF="\$HOME/merta-watchdog.log"
+
+CMD="\${1:-}"
+
+fix_killer() {
+  local rish_bin=""
+  for c in "$HOME/rish" "$PREFIX/bin/rish"; do
+    [ -f "\$c" ] && { rish_bin="\$c"; break; }
+  done
+  if [ -n "\$rish_bin" ]; then
+    setsid timeout 6 "\$rish_bin" -c "/system/bin/device_config put activity_manager max_phantom_processes 2147483647; /system/bin/device_config set_sync_disabled_for_tests persistent; /system/bin/settings put global settings_enable_monitor_phantom_procs false" </dev/null >/dev/null 2>&1 && echo "✓ Phantom Process Killer отключён" || echo "! Не удалось выполнить через rish"
+  else
+    echo "! rish не найден"
+  fi
+}
+
+start_watchdog() {
+  if [ -f "\$WPIDF" ] && kill -0 "\$(cat "\$WPIDF" 2>/dev/null)" 2>/dev/null; then
+    return 0
+  fi
+  pkill -9 -f '[m]erta-watchdog' 2>/dev/null || true
+  setsid nohup "$HOME/bin/merta-watchdog" >> "\$WLOGF" 2>&1 &
+  echo \$! > "\$WPIDF"
+}
+
+stop_all() {
+  echo "Останавливаю watchdog..."
+  pkill -9 -f '[m]erta-watchdog' 2>/dev/null || true
+  rm -f "\$WPIDF"
+
+  echo "Останавливаю демона merta-agy..."
+  proot-distro login "$DISTRO" -- pkill -9 -f '[d]aemon\.py' 2>/dev/null || true
+  [ -f "\$PIDF" ] && kill -9 "\$(cat "\$PIDF" 2>/dev/null)" 2>/dev/null || true
+  rm -f "\$PIDF"
+
+  echo "✓ Остановлено"
+}
+
+start_daemon() {
+  \$PREFIX/bin/termux-wake-lock 2>/dev/null || true
+
+  if curl -fsS -m 2 http://127.0.0.1:18080/ping >/dev/null 2>&1; then
+    echo "✓ Демон уже работает на 127.0.0.1:18080"
+  else
+    echo "Запускаю демона в proot ($DISTRO)..."
+    proot-distro login "$DISTRO" -- pkill -9 -f '[d]aemon\.py' 2>/dev/null || true
+    sleep 1
+    rm -f "\$PIDF"
+    setsid nohup proot-distro login "$DISTRO" -- python3 /root/merta-agy/daemon.py >>"\$LOGF" 2>&1 &
+    echo \$! > "\$PIDF"
+
+    local waited=0
+    while [ \$waited -lt 8 ]; do
+      sleep 1
+      waited=\$((waited + 1))
+      if curl -fsS -m 2 http://127.0.0.1:18080/ping >/dev/null 2>&1; then
+        echo "✓ Демон успешно запустился!"
+        break
+      fi
+    done
+  fi
+
+  start_watchdog
+  fix_killer >/dev/null 2>&1 || true
+}
+
+case "\$CMD" in
+  stop)
+    stop_all
+    ;;
+  restart)
+    stop_all
+    sleep 1
+    start_daemon
+    echo ""
+    curl -fsS -m 15 http://127.0.0.1:18080/status 2>/dev/null || echo "! Демон ещё инициализируется..."
+    echo ""
+    ;;
+  status)
+    echo "=== Статус merta-agy ==="
+    if curl -fsS -m 3 http://127.0.0.1:18080/ping >/dev/null 2>&1; then
+      echo "Демон: РАБОТАЕТ (порт 18080)"
+      curl -fsS -m 15 http://127.0.0.1:18080/status 2>/dev/null; echo ""
+    else
+      echo "Демон: НЕ ОТВЕЧАЕТ"
+    fi
+    if [ -f "\$WPIDF" ] && kill -0 "\$(cat "\$WPIDF" 2>/dev/null)" 2>/dev/null; then
+      echo "Watchdog: РАБОТАЕТ (PID \$(cat "\$WPIDF"))"
+    else
+      echo "Watchdog: НЕ ЗАПУЩЕН"
+    fi
+    ;;
+  logs|log)
+    tail -n 50 -f "\$LOGF"
+    ;;
+  fix-killer)
+    fix_killer
+    ;;
+  start|"")
+    start_daemon
+    echo ""
+    echo "=== Статус ==="
+    curl -fsS -m 15 http://127.0.0.1:18080/status 2>/dev/null || echo "! Демон запускается..."
+    echo ""
+    ;;
+  *)
+    echo "Использование: merta [start|stop|restart|status|logs|fix-killer]"
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$HOME/bin/merta"
+
+# Симлинки в $PREFIX/bin (чтобы команда `merta` работала из любого каталога)
+ln -sf "$HOME/bin/merta" "$PREFIX/bin/merta"
+ln -sf "$HOME/bin/merta" "$PREFIX/bin/merta-agy"
+ln -sf "$HOME/bin/merta" "$HOME/bin/merta-agy"
+
+# Keepalive в proot cron (если есть cron/crontab)
 cat > "$ROOTFS/root/merta-agy/keepalive.sh" <<'EOF'
 #!/bin/bash
-# Раз в 15 минут: демон мёртв — поднять; жив — проверить патч.
-if ! curl -fsS -m 20 http://127.0.0.1:18080/status >/dev/null 2>&1; then
+if ! curl -fsS -m 20 http://127.0.0.1:18080/ping >/dev/null 2>&1; then
   cd /root/merta-agy && nohup python3 daemon.py >>daemon.log 2>&1 &
   sleep 2
 fi
@@ -139,33 +278,36 @@ if login command -v crontab >/dev/null 2>&1; then
   login bash -c "(crontab -l 2>/dev/null | grep -v merta-agy; echo '*/15 * * * * /root/merta-agy/keepalive.sh >>/root/merta-agy/cron.log 2>&1') | crontab -" \
     && say "cron-keepalive: каждые 15 минут" || say "! cron не настроился (не критично)"
   login bash -c "service cron start 2>/dev/null || (command -v cron >/dev/null && (pgrep -x cron >/dev/null || cron) 2>/dev/null); true"
-else
-  say "! в proot нет cron — keepalive пропущен (демон поднимет приложение/boot)"
 fi
 
-# Boot-скрипт Termux (сработает при установленном Termux:Boot).
+# Boot-скрипт Termux (сработает при установленном Termux:Boot)
 mkdir -p "$HOME/.termux/boot"
 cat > "$HOME/.termux/boot/merta-agy" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 $PREFIX/bin/termux-wake-lock 2>/dev/null
-nohup $HOME/bin/merta-agy >>$HOME/merta-agy.log 2>&1 &
+$HOME/bin/merta start >>$HOME/merta-agy.log 2>&1 &
 EOF
 chmod +x "$HOME/.termux/boot/merta-agy"
-say "boot-скрипт записан (нужен аддон Termux:Boot)"
+say "boot-скрипт записан (для Termux:Boot)"
 
-# Проверка agy-autopatch в proot (для автопатча).
+# Проверка agy-autopatch в proot (для автопатча)
 if [ -n "$PPATCHER" ]; then
   say "agy-autopatch: есть"
 else
   say "! agy-autopatch не найден в proot — автопатч работать не будет"
 fi
 
-say "перезапуск демона…"
-PIDF="$HOME/merta-agy.pid"
-[ -f "$PIDF" ] && kill -9 "$(cat "$PIDF")" 2>/dev/null
-# Зомби внутри proot (паттерн daemon.py; брекеты — чтобы pkill не убил сам себя).
-proot-distro login "$DISTRO" -- pkill -9 -f '[d]aemon\.py' 2>/dev/null
-sleep 1
-rm -f "$PIDF"
-say "запуск демона…"
-"$HOME/bin/merta-agy"
+say "перезапуск merta и watchdog…"
+"$HOME/bin/merta" restart
+
+say ""
+say "============================================================"
+say "✓ Демон merta-agy и Watchdog настроены!"
+say "Команды в Termux (из любой папки):"
+say "  merta         - статус / быстрый старт"
+say "  merta restart - перезапуск демона и watchdog"
+say "  merta stop    - остановка демона"
+say "  merta logs    - просмотр логов"
+say "  merta status  - подробный статус"
+say "  merta fix-killer - отключить Android Phantom Process Killer"
+say "============================================================"
