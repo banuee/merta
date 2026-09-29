@@ -493,30 +493,36 @@ class Handler(BaseHTTPRequestHandler):
         try:
             assert proc.stdout is not None
             saw_done_or_error = False
+            client_alive = True
             for line in proc.stdout:
                 if line.strip():
                     if '"status":' in line or '"result":' in line or '"error":' in line:
                         saw_done_or_error = True
-                    chunk = (line if line.endswith("\n") else line + "\n").encode(
-                        "utf-8", "replace")
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                    if client_alive:
+                        try:
+                            chunk = (line if line.endswith("\n") else line + "\n").encode(
+                                "utf-8", "replace")
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError):
+                            client_alive = False
+                            log("run: client disconnected, agy continuing in background")
             rc = proc.wait(timeout=timeout)
             try:
                 t_err.join(timeout=1.0)
             except Exception:
                 pass
             log("run done rc=%d" % rc)
-            if rc != 0 and not saw_done_or_error:
+            if client_alive and rc != 0 and not saw_done_or_error:
                 err_msg = " ".join(err_lines)[-500:] if err_lines else ""
                 if not err_msg:
                     err_msg = "процесс agy завершился с кодом %d" % rc
                 err_json = json.dumps({"event": "result", "result": {"status": "ERROR", "error": err_msg}}) + "\n"
-                self.wfile.write(err_json.encode("utf-8", "replace"))
-                self.wfile.flush()
-        except BrokenPipeError:
-            kill_proc_tree(proc)
-            log("run: client gone, killed")
+                try:
+                    self.wfile.write(err_json.encode("utf-8", "replace"))
+                    self.wfile.flush()
+                except Exception:
+                    pass
         except subprocess.TimeoutExpired:
             kill_proc_tree(proc)
             log("run: timeout %ds, killed" % timeout)

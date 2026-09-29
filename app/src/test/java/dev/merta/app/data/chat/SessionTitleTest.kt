@@ -24,6 +24,24 @@ class SessionTitleTest {
     fun `empty prompt`() {
         assertEquals("Новый чат", SessionStore.titleFromPrompt("  ...  "))
     }
+
+    @Test
+    fun `saves and loads conversationId`() {
+        val dir = java.nio.file.Files.createTempDirectory("session-test").toFile()
+        try {
+            val store = SessionStore(dir)
+            val msg = listOf(
+                dev.merta.app.ui.chat.ChatMessage(1, dev.merta.app.ui.chat.ChatMessage.Role.USER, "Привет"),
+            )
+            store.save("s1", "Заголовок", msg, conversationId = "conv-12345")
+            assertEquals("conv-12345", store.loadConversationId("s1"))
+            val loaded = store.load("s1")
+            assertEquals(1, loaded.size)
+            assertEquals("Привет", loaded[0].text)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }
 
 class FrontmatterTest {

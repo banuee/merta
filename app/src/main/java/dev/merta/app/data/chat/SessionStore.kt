@@ -77,7 +77,17 @@ class SessionStore(private val chatsDir: File) {
         }
     }
 
-    fun save(id: String, title: String, messages: List<ChatMessage>) {
+    fun loadConversationId(id: String): String? {
+        val f = File(chatsDir, "$id.json")
+        if (!f.exists()) return null
+        return try {
+            JSONObject(f.readText()).optString("conversationId", "").ifBlank { null }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun save(id: String, title: String, messages: List<ChatMessage>, conversationId: String? = null) {
         try {
             chatsDir.mkdirs()
             val arr = JSONArray()
@@ -97,6 +107,9 @@ class SessionStore(private val chatsDir: File) {
                 .put("title", title)
                 .put("updatedAt", System.currentTimeMillis())
                 .put("messages", arr)
+            if (!conversationId.isNullOrBlank()) {
+                root.put("conversationId", conversationId)
+            }
             val target = File(chatsDir, "$id.json")
             val tmp = File(chatsDir, "$id.json.tmp")
             tmp.writeText(root.toString())

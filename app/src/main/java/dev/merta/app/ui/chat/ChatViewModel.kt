@@ -31,8 +31,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Модели одного провайдера для группированного пикера. */
@@ -70,6 +72,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = MertaSettings(app)
     private val agentFiles = AgentFiles(app)
     private val sessions = SessionStore(agentFiles.chatsDir)
+    /** conversation_id agy по сессиям чата (память между ходов — резум беседы). */
+    private val agyConversations = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val persistMutex = kotlinx.coroutines.sync.Mutex()
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -180,8 +185,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        val id = sessions.newId()
-        _state.update { it.copy(sessionId = id) }
+        val last = sessions.list().firstOrNull()
+        if (last != null) {
+            val loaded = sessions.load(last.id)
+            if (loaded.isNotEmpty()) {
+                currentTitle = last.title
+                nextId = (loaded.maxOfOrNull { it.id } ?: 0) + 1
+                sessions.loadConversationId(last.id)?.let { agyConversations[last.id] = it }
+                _state.update { it.copy(sessionId = last.id, messages = loaded) }
+            } else {
+                val id = sessions.newId()
+                _state.update { it.copy(sessionId = id) }
+            }
+        } else {
+            val id = sessions.newId()
+            _state.update { it.copy(sessionId = id) }
+        }
         refreshConfig()
         refreshSessions()
         viewModelScope.launch {
@@ -343,6 +362,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val loaded = sessions.load(id)
         currentTitle = meta.title
         nextId = (loaded.maxOfOrNull { it.id } ?: 0) + 1
+        sessions.loadConversationId(id)?.let { agyConversations[id] = it }
         usageState.value = dev.merta.app.data.chat.SessionUsage()
         quotaState.value = null
         quotaLoading.value = false
@@ -645,6 +665,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         currentThoughtId = null
         _state.update { it.copy(sending = true, streaming = "") }
         streamJob = viewModelScope.launch {
+            val ticker = launch(Dispatchers.Default) {
+                while (isActive) {
+                    kotlinx.coroutines.delay(5000)
+                    persist()
+                }
+            }
             try {
                 withContext(Dispatchers.IO) {
                     client.runAgent(
@@ -688,6 +714,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Ошибка: ${e.message}"))
                 }
             } finally {
+                ticker.cancel()
                 sealTurn()
                 val now = System.currentTimeMillis()
                 _state.update { st ->
@@ -707,8 +734,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 currentThoughtId = null
                 activeClient = null
+                persist()
             }
-            persist()
         }
     }
 
@@ -740,8 +767,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** conversation_id agy по сессиям чата (память между ходов — резум беседы). */
-    private val agyConversations = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun agyProvider(): Provider? = settings.loadProviders().find { it.isAgy }
 
@@ -771,6 +796,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         currentThoughtId = null
         _state.update { it.copy(sending = true, streaming = "") }
         streamJob = viewModelScope.launch {
+            val ticker = launch(Dispatchers.Default) {
+                while (isActive) {
+                    kotlinx.coroutines.delay(5000)
+                    persist()
+                }
+            }
             try {
                 withContext(Dispatchers.IO) {
                     var thoughtOpened = false
@@ -858,6 +889,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Ошибка: ${e.message}"))
                 }
             } finally {
+                ticker.cancel()
                 val now = System.currentTimeMillis()
                 _state.update { st ->
                     st.copy(
@@ -876,8 +908,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 currentThoughtId = null
                 activeAgy = null
+                persist()
             }
-            persist()
         }
     }
 
@@ -945,8 +977,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             currentTitle = SessionStore.titleFromPrompt(firstUser)
         }
         if (s.messages.any { it.role == ChatMessage.Role.USER }) {
-            sessions.save(s.sessionId, currentTitle, s.messages)
-            refreshSessions()
+            val title = currentTitle
+            val msgs = s.messages
+            val sessionId = s.sessionId
+            val convId = agyConversations[sessionId]
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    persistMutex.withLock {
+                        sessions.save(sessionId, title, msgs, convId)
+                    }
+                    withContext(Dispatchers.Main) {
+                        refreshSessions()
+                    }
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
@@ -980,6 +1025,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
+        persist()
     }
 
     private fun finishThought(thoughtId: Long, tookMs: Long) {
@@ -994,6 +1040,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
+        persist()
     }
 
     /** Доклеить кусок reasoning-стрима в Thought (с обрезкой хвоста). */
@@ -1013,12 +1060,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun push(msg: ChatMessage) {
         _state.update { it.copy(messages = it.messages + msg) }
+        persist()
     }
 
     private fun nextId(): Long = nextId++
 
     override fun onCleared() {
-        cancelStream(keepPartial = false)
+        cancelStream(keepPartial = true)
+        try {
+            persist()
+        } catch (_: Exception) {
+        }
         try {
             dev.merta.app.adb.ShizukuOpsImpl(getApplication()).removePermissionListener(shizukuPermListener)
         } catch (_: Exception) {
