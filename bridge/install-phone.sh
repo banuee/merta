@@ -59,11 +59,21 @@ fi
 [ -n "$PAGY" ] && [ -z "$AGY_BIN" ] && AGY_BIN="$PAGY"
 say "agy: ${AGY_BIN:-НЕ НАЙДЕН}"
 say "патчер: ${PPATCHER:-не найден}"
+say "rish: проверка…"
+RISH=""
+for c in "$HOME/rish" "$PREFIX/bin/rish"; do
+  if [ -x "$c" ]; then RISH="$c"; break; fi
+done
+RISH_OK=0
+if [ -n "$RISH" ] && "$RISH" -c 'id' >/dev/null 2>&1; then RISH_OK=1; fi
+say "rish: ${RISH:-НЕ НАЙДЕН} (работает: $RISH_OK)"
 # config.json для демона (пустые значения — автопоиск).
 {
   printf '{'
   printf '"agy_bin": "%s", ' "$AGY_BIN"
-  printf '"patcher_bin": "%s"' "$PPATCHER"
+  printf '"patcher_bin": "%s", ' "$PPATCHER"
+  printf '"rish_bin": "%s", ' "$RISH"
+  printf '"termux_home": "%s"' "$HOME"
   printf '}\n'
 } > "$ROOTFS/root/merta-agy/config.json"
 
@@ -79,6 +89,9 @@ fi
 if [ -f "\$PIDF" ] && kill -0 "\$(cat "\$PIDF")" 2>/dev/null; then
   echo "already running (pid \$(cat "\$PIDF"))"
 else
+  proot-distro login "$DISTRO" -- pkill -9 -f '[m]erta-agy' 2>/dev/null
+  sleep 1
+  rm -f "\$PIDF"
   setsid nohup proot-distro login "$DISTRO" -- python3 /root/merta-agy/daemon.py \\
     >>"\$HOME/merta-agy.log" 2>&1 &
   echo \$! > "\$PIDF"
@@ -127,8 +140,10 @@ fi
 say "перезапуск демона…"
 PIDF="$HOME/merta-agy.pid"
 [ -f "$PIDF" ] && kill -9 "$(cat "$PIDF")" 2>/dev/null
-# Зомби внутри proot (брекеты — чтобы pkill не убил сам себя).
-proot-distro login "$DISTRO" -- pkill -9 -f '[m]erta-agy-daemon' 2>/dev/null
+# Зомби внутри proot (брекеты — чтобы pkill не убил сам себя;
+# паттерн — по пути /root/merta-agy, который есть в cmdline процесса).
+proot-distro login "$DISTRO" -- pkill -9 -f '[m]erta-agy' 2>/dev/null
+proot-distro login "$DISTRO" -- pkill -9 -f '[d]aemon\.py' 2>/dev/null
 sleep 1
 rm -f "$PIDF"
 say "запуск демона…"
