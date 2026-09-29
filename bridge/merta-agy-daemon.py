@@ -108,7 +108,12 @@ def resolve_rish(cfg):
 
 
 def run_rish(cmd_text, timeout=60):
-    """Команда в Shizuku-shell через rish. Возвращает (rc, output)."""
+    """Команда в Shizuku-shell через rish. Возвращает (rc, output).
+
+    rish-скрипт под proot-root не работает (его `[ -w dex ]` для рута
+    всегда true) — зовём app_process напрямую, dex заранее chmod 400
+    (на Android 14+ app_process не грузит записываемый dex).
+    """
     if not RISH:
         return 99, "rish not found (run install-phone.sh, needs Shizuku setup)"
     if not cmd_text or not cmd_text.strip():
@@ -117,18 +122,18 @@ def run_rish(cmd_text, timeout=60):
         timeout = max(5, min(int(timeout), 300))
     except (ValueError, TypeError):
         timeout = 60
-    argv = [RISH, "-c", cmd_text]
+    dex = os.path.join(os.path.dirname(RISH), "rish_shizuku.dex")
+    try:
+        os.chmod(dex, 0o444)
+    except OSError:
+        pass
+    env = dict(os.environ, RISH_APPLICATION_ID="com.termux")
+    argv = ["/system/bin/app_process", "-Djava.class.path=" + dex,
+            "/system/bin", "--nice-name=rish",
+            "rikka.shizuku.shell.ShizukuShellLoader", "-c", cmd_text]
     try:
         p = subprocess.run(argv, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
-    except PermissionError:
-        # Нет +x на скрипте — выполняем через sh.
-        try:
-            p = subprocess.run(["sh", RISH, "-c", cmd_text],
-                               capture_output=True, text=True,
-                               timeout=timeout, stdin=subprocess.DEVNULL)
-        except Exception as e:
-            return 98, "rish error: %s" % e
+                           timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except Exception as e:
         return 98, "rish error: %s" % e
     return p.returncode, (p.stdout + p.stderr)[-20000:]
