@@ -70,8 +70,9 @@ else
   done
   if [ -n "$RISH" ]; then
     # timeout обязателен: rish может зависнуть в ожидании Shizuku.
-    if timeout 25 "$RISH" -c 'id' >/dev/null 2>&1 \
-       || timeout 25 sh "$RISH" -c 'id' >/dev/null 2>&1; then
+    # setsid: если rish шлёт сигналы группе — умрёт только откреплённая группа.
+    if setsid timeout 25 "$RISH" -c 'id' </dev/null >/dev/null 2>&1 \
+       || setsid timeout 25 sh "$RISH" -c 'id' </dev/null >/dev/null 2>&1; then
       RISH_OK=1
     fi
   fi
