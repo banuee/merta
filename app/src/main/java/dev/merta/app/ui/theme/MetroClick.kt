@@ -94,3 +94,19 @@ fun Modifier.metroClickable(
             }
         )
 }
+
+/**
+ * Глушит тапы (корень панели поверх скрима): потребляет нажатие
+ * без визуала и отскока, чтобы тап мимо кнопок не долетал до скрима.
+ */
+@Composable
+fun Modifier.metroTapConsume(): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    return this.then(
+        Modifier.clickable(
+            interactionSource = interaction,
+            indication = null,
+            onClick = {},
+        ),
+    )
+}

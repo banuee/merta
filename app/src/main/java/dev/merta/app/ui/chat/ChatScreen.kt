@@ -1,6 +1,8 @@
 package dev.merta.app.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -54,10 +56,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.merta.app.data.settings.MertaSettings
 import dev.merta.app.ui.theme.LocalMetroScheme
-import dev.merta.app.ui.theme.MetroAnimations
 import dev.merta.app.ui.theme.MetroDimens
 import dev.merta.app.ui.theme.MetroFonts
+import dev.merta.app.ui.theme.metroBlurEffect
 import dev.merta.app.ui.theme.metroClickable
+import dev.merta.app.ui.theme.metroTapConsume
 
 /**
  * Главный экран: шапка Metro, пузыри модели/effort, лента, ввод.
@@ -82,6 +85,15 @@ fun ChatScreen(
     val clip = LocalClipboardManager.current
     var drawer by remember { mutableStateOf<Drawer?>(null) }
     var dragTotal by remember { mutableStateOf(0f) }
+    // Сторона для анимации закрытия: на выходе drawer уже null.
+    var lastSide by remember { mutableStateOf(Drawer.RIGHT) }
+    if (drawer != null) lastSide = drawer!!
+    // Блюр контента под шторкой (0 = нет).
+    val blurPx by animateFloatAsState(
+        targetValue = if (drawer != null) 48f else 0f,
+        animationSpec = tween(durationMillis = 250),
+        label = "drawer-blur",
+    )
 
     LaunchedEffect(drawer) {
         if (drawer == Drawer.LEFT) vm.refreshSessions()
@@ -129,6 +141,7 @@ fun ChatScreen(
             .fillMaxSize()
             .imePadding()
             .padding(horizontal = 12.dp)
+            .metroBlurEffect(blurPx)
             .pointerInput(drawer) {
                 detectHorizontalDragGestures(
                     onDragEnd = { dragTotal = 0f },
@@ -376,20 +389,43 @@ fun ChatScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.55f))
+                    .background(Color.Black.copy(alpha = 0.35f))
                     .metroClickable(targetScale = 1.0f) { drawer = null },
             )
         }
         AnimatedVisibility(
             visible = open != null,
             enter = slideInHorizontally { w -> if (open == Drawer.RIGHT) w else -w } + fadeIn(),
-            exit = slideOutHorizontally { w -> if (open == Drawer.RIGHT) w else -w } + fadeOut(),
+            exit = slideOutHorizontally { w -> if (lastSide == Drawer.RIGHT) w else -w } + fadeOut(),
         ) {
             Box(
-                contentAlignment = if (open == Drawer.LEFT) Alignment.CenterStart else Alignment.CenterEnd,
+                contentAlignment = if (lastSide == Drawer.LEFT) Alignment.CenterStart else Alignment.CenterEnd,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                Box(Modifier.fillMaxHeight().fillMaxWidth(0.85f)) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.85f)
+                        .metroTapConsume()
+                        .pointerInput(drawer) {
+                            // Тот же детектор, что на контенте: свайп изнутри
+                            // панели до контента не долетает, закрываем сами.
+                            detectHorizontalDragGestures(
+                                onDragEnd = { dragTotal = 0f },
+                                onDragCancel = { dragTotal = 0f },
+                                onHorizontalDrag = { _, amount ->
+                                    dragTotal += amount
+                                    if (drawer == Drawer.RIGHT && dragTotal > 90) {
+                                        drawer = null
+                                        dragTotal = 0f
+                                    } else if (drawer == Drawer.LEFT && dragTotal < -90) {
+                                        drawer = null
+                                        dragTotal = 0f
+                                    }
+                                },
+                            )
+                        },
+                ) {
                     if (open == Drawer.RIGHT) {
                         SessionDrawer(
                             vm = vm,

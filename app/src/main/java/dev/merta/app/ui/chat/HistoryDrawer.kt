@@ -47,7 +47,7 @@ fun HistoryDrawer(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(scheme.glassDeep)
+            .background(androidx.compose.ui.graphics.Color(0xFF0B0B0B).copy(alpha = 0.62f))
             .padding(horizontal = 12.dp),
     ) {
         Row(

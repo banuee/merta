@@ -122,6 +122,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** Лимиты agy (`/usage`), с временем замера. null — не запрашивали/нет. */
     data class QuotaData(val groups: List<dev.merta.app.bridge.QuotaGroup>, val fetchedAt: Long)
     val quotaState = MutableStateFlow<QuotaData?>(null)
+    /** Идёт ли запрос лимитов (индикатор в шторке). */
+    val quotaLoading = MutableStateFlow(false)
+    /** Ошибка последнего запроса лимитов (показ в шторке вместо вечного хинта). */
+    val quotaError = MutableStateFlow<String?>(null)
     private var quotaFetching = false
 
     /** Статус Shizuku для настроек (обновляется по запросу). */
@@ -315,6 +319,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         nextId = 1L
         usageState.value = dev.merta.app.data.chat.SessionUsage()
         quotaState.value = null
+        quotaLoading.value = false
+        quotaError.value = null
         _state.update { it.copy(sessionId = sessions.newId(), messages = emptyList(), streaming = null, sending = false) }
         refreshConfig()
         refreshSessions()
@@ -329,6 +335,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         nextId = (loaded.maxOfOrNull { it.id } ?: 0) + 1
         usageState.value = dev.merta.app.data.chat.SessionUsage()
         quotaState.value = null
+        quotaLoading.value = false
+        quotaError.value = null
         _state.update { it.copy(sessionId = id, messages = loaded, streaming = null) }
     }
 
@@ -422,7 +430,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Лимиты agy для панели сессии. Кэш 5 минут (как официальные тулзы),
-     * force — мимо кэша. Параллельные запросы схлопываются.
+     * force — мимо кэша. Параллельные запросы схлопываются, на неудачу —
+     * один ретрай и текст ошибки (а не вечный «подтяну»).
      */
     fun refreshQuota(force: Boolean = false) {
         val agy = settings.loadProviders().find { it.isAgy } ?: return
@@ -430,17 +439,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (!force && cached != null && System.currentTimeMillis() - cached.fetchedAt < 5 * 60 * 1000) return
         if (quotaFetching) return
         quotaFetching = true
+        quotaLoading.value = true
+        quotaError.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val groups = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl).quota()
+                val client = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl)
+                var groups = client.quota()
+                if (groups.isEmpty()) {
+                    kotlinx.coroutines.delay(2000)
+                    groups = client.quota()
+                }
                 if (groups.isNotEmpty()) {
                     quotaState.value = QuotaData(groups, System.currentTimeMillis())
+                } else {
+                    quotaError.value = "не подтянулось — жми ⟳"
                 }
             } catch (_: Exception) {
+                quotaError.value = "не подтянулось — жми ⟳"
             } finally {
+                quotaLoading.value = false
                 quotaFetching = false
             }
         }
+    }
+
+    /** Группа лимитов под текущую модель (claude/gpt → Claude, иначе Gemini). */
+    fun quotaForCurrent(): dev.merta.app.bridge.QuotaGroup? {
+        val agy = settings.loadProviders().find { it.isAgy } ?: return null
+        val model = settings.selectedModel(agy.id)
+        return dev.merta.app.bridge.QuotaJson.groupForModel(quotaState.value?.groups.orEmpty(), model)
     }
 
     // ---------- отправка ----------

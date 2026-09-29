@@ -1,5 +1,11 @@
 package dev.merta.app.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -53,14 +59,17 @@ fun SessionDrawer(
     val scheme = LocalMetroScheme.current
     val ui by vm.state.collectAsState()
     val usage by vm.usageState.collectAsState()
-    val quota by vm.quotaState.collectAsState()
+    val quotaGroup = vm.quotaForCurrent()
+    val quotaLoading by vm.quotaLoading.collectAsState()
+    val quotaError by vm.quotaError.collectAsState()
+    val hasQuotaData = vm.quotaState.collectAsState().value != null
     var modelsOpen by remember { mutableStateOf(false) }
     var effortOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(scheme.glassDeep)
+            .background(Color(0xFF0B0B0B).copy(alpha = 0.62f))
             .padding(horizontal = 12.dp),
     ) {
         Row(
@@ -89,7 +98,10 @@ fun SessionDrawer(
 
         if (vm.isAgyActive()) {
             QuotaCard(
-                quota = quota,
+                group = quotaGroup,
+                hasData = hasQuotaData,
+                loading = quotaLoading,
+                error = quotaError,
                 usage = usage,
                 onRefresh = { vm.refreshQuota(force = true) },
             )
@@ -109,7 +121,12 @@ fun SessionDrawer(
             open = modelsOpen,
             onToggle = { modelsOpen = !modelsOpen },
         )
-        if (modelsOpen) {
+        AnimatedVisibility(
+            visible = modelsOpen,
+            enter = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(180)),
+            exit = shrinkVertically(animationSpec = tween(200)) + fadeOut(animationSpec = tween(150)),
+        ) {
+            Column {
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.heightIn(max = 320.dp),
@@ -167,6 +184,7 @@ fun SessionDrawer(
                     .metroClickable(targetScale = 0.97f, onClick = onOpenModels)
                     .padding(vertical = 8.dp),
             )
+            }
         }
 
         Spacer(Modifier.height(8.dp))
@@ -176,7 +194,11 @@ fun SessionDrawer(
             open = effortOpen,
             onToggle = { effortOpen = !effortOpen },
         )
-        if (effortOpen) {
+        AnimatedVisibility(
+            visible = effortOpen,
+            enter = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(180)),
+            exit = shrinkVertically(animationSpec = tween(200)) + fadeOut(animationSpec = tween(150)),
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 EffortPickRow("Выкл", ui.effort == null) { vm.setEffort(null); effortOpen = false }
                 for (e in MertaSettings.Efforts.ALL) {
@@ -305,10 +327,13 @@ private fun CostCard(
     }
 }
 
-/** Карточка лимитов agy: группы с прогресс-барами + токены сессии. */
+/** Карточка лимитов agy: группа текущей модели с прогресс-барами + токены сессии. */
 @Composable
 private fun QuotaCard(
-    quota: ChatViewModel.QuotaData?,
+    group: dev.merta.app.bridge.QuotaGroup?,
+    hasData: Boolean,
+    loading: Boolean,
+    error: String?,
     usage: SessionUsage,
     onRefresh: () -> Unit,
 ) {
@@ -339,46 +364,49 @@ private fun QuotaCard(
                 modifier = Modifier.metroClickable(targetScale = 0.88f, onClick = onRefresh),
             )
         }
-        if (quota == null) {
+        if (group == null) {
             Text(
-                text = "открой шторку — подтяну лимиты…",
+                text = when {
+                    loading -> "тяну лимиты…"
+                    error != null -> error
+                    hasData -> "нет лимитов под эту модель"
+                    else -> "открой шторку — подтяну лимиты…"
+                },
                 fontFamily = MetroFonts.text,
                 fontSize = 13.sp,
                 color = scheme.textDim,
             )
         } else {
-            for (g in quota.groups) {
+            Text(
+                text = group.name,
+                fontFamily = MetroFonts.text,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                color = scheme.text,
+            )
+            for (b in group.buckets) {
+                val pct = (b.remaining * 100).toInt()
                 Text(
-                    text = g.name,
+                    text = "${b.name}: $pct% · ${QuotaJson.resetIn(b.resetTime)}",
                     fontFamily = MetroFonts.text,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    color = scheme.text,
+                    fontSize = 12.sp,
+                    color = scheme.textDim,
                 )
-                for (b in g.buckets) {
-                    val pct = (b.remaining * 100).toInt()
-                    Text(
-                        text = "${b.name}: $pct% · ${QuotaJson.resetIn(b.resetTime)}",
-                        fontFamily = MetroFonts.text,
-                        fontSize = 12.sp,
-                        color = scheme.textDim,
-                    )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(scheme.stroke),
+                ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(scheme.stroke),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(b.remaining.toFloat().coerceIn(0f, 1f))
-                                .fillMaxHeight()
-                                .background(if (pct < 20) scheme.red else scheme.accent),
-                        )
-                    }
-                    Spacer(Modifier.height(2.dp))
+                            .fillMaxWidth(b.remaining.toFloat().coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(if (pct < 20) scheme.red else scheme.accent),
+                    )
                 }
+                Spacer(Modifier.height(2.dp))
             }
         }
         Text(

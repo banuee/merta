@@ -116,9 +116,20 @@ object QuotaJson {
     }
 
     /**
-     * «через 5д 20ч» / «через 1ч 11м» / «скоро» по ISO UTC reset_time.
-     * nowMs — для тестов.
+     * Группа лимитов под текущую модель: claude/gpt-* → группа Claude,
+     * остальное → группа Gemini. Нет подходящей — первая (старое поведение).
+     * Чистая — покрыта JVM-тестами.
      */
+    fun groupForModel(groups: List<QuotaGroup>, modelId: String): QuotaGroup? {
+        if (groups.isEmpty()) return null
+        val m = modelId.lowercase()
+        val wantClaude = "claude" in m || "gpt" in m
+        val byName = groups.firstOrNull { g ->
+            val n = g.name.lowercase()
+            if (wantClaude) "claude" in n else "gemini" in n
+        }
+        return byName ?: groups.first()
+    }
     fun resetIn(resetTime: String, nowMs: Long = System.currentTimeMillis()): String {
         val reset = parseIsoUtc(resetTime) ?: return ""
         val diff = reset - nowMs

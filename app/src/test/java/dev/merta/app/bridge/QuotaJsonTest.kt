@@ -30,6 +30,16 @@ class QuotaJsonTest {
     }
 
     @Test
+    fun `groupForModel picks family`() {
+        val groups = QuotaJson.parse(sample)
+        assertEquals("Gemini Models", QuotaJson.groupForModel(groups, "gemini-3.8-flash")?.name)
+        assertEquals("Claude and GPT models", QuotaJson.groupForModel(groups, "claude-opus-4-6")?.name)
+        assertEquals("Claude and GPT models", QuotaJson.groupForModel(groups, "gpt-oss-120b")?.name)
+        assertEquals("Gemini Models", QuotaJson.groupForModel(groups, "")?.name)
+        assertEquals(null, QuotaJson.groupForModel(emptyList(), "gemini-x"))
+    }
+
+    @Test
     fun `resetIn formats countdown`() {
         // reset 2026-10-05T11:20:04Z, now — на 5д 20ч раньше.
         val reset = QuotaJson.parseIsoUtc("2026-10-05T11:20:04Z")!!
