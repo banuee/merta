@@ -165,12 +165,26 @@ class ToolRegistryTest {
                 mapOf("apk" to "/data/data/dev.merta.app/x.apk"),
             ),
         )
-        // Пробел/пайп в фильтре пакетов.
+        // Пробел/пайп/таб/амперсанд в фильтре пакетов.
         assertEquals(
             null,
             ToolRegistry.daemonCmd(
                 dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES,
                 mapOf("filter" to "a b"),
+            ),
+        )
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES,
+                mapOf("filter" to "a\tb"),
+            ),
+        )
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES,
+                mapOf("filter" to "a&id"),
             ),
         )
         // Не-числа и минусы в координатах.

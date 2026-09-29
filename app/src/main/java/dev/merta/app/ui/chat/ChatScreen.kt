@@ -116,6 +116,7 @@ fun ChatScreen(
     if (showEffort) {
         EffortDialog(
             current = ui.effort,
+            available = vm.availableEffortsForCurrent(),
             onPick = {
                 vm.setEffort(it)
                 showEffort = false
@@ -394,7 +395,7 @@ fun ChatScreen(
         }
         AnimatedVisibility(
             visible = open != null,
-            enter = slideInHorizontally { w -> if (open == Drawer.RIGHT) w else -w } + fadeIn(),
+            enter = slideInHorizontally { w -> if (lastSide == Drawer.RIGHT) w else -w } + fadeIn(),
             exit = slideOutHorizontally { w -> if (lastSide == Drawer.RIGHT) w else -w } + fadeOut(),
         ) {
             Box(
@@ -518,8 +519,14 @@ private fun DaemonBtn(label: String, onClick: () -> Unit) {
     }
 }
 
-/** Маленький диалог выбора effort (reasoning). */@Composable
-private fun EffortDialog(current: String?, onPick: (String?) -> Unit, onDismiss: () -> Unit) {
+/** Маленький диалог выбора effort (reasoning). */
+@Composable
+private fun EffortDialog(
+    current: String?,
+    available: List<String>,
+    onPick: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val scheme = LocalMetroScheme.current
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -531,20 +538,29 @@ private fun EffortDialog(current: String?, onPick: (String?) -> Unit, onDismiss:
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("EFFORT", fontFamily = MetroFonts.text, fontSize = 12.sp, letterSpacing = 1.5.sp, color = scheme.textDim)
-            AnimatedVisibility(visible = true, enter = fadeIn(), exit = fadeOut()) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EffortRow("Выкл", current == null) { onPick(null) }
-                    for (e in MertaSettings.Efforts.ALL) {
-                        EffortRow(e, current == e) { onPick(e) }
+            if (available.isEmpty()) {
+                Text(
+                    "Эта модель не поддерживает уровень рассуждений (reasoning effort).",
+                    fontFamily = MetroFonts.text,
+                    fontSize = 12.sp,
+                    color = scheme.textDim,
+                )
+            } else {
+                AnimatedVisibility(visible = true, enter = fadeIn(), exit = fadeOut()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EffortRow("Выкл", current == null) { onPick(null) }
+                        for (e in available) {
+                            EffortRow(e, current == e) { onPick(e) }
+                        }
                     }
                 }
+                Text(
+                    "Уровень рассуждений для текущей модели. Если модель не поддерживает переданный уровень — запрос повторится без него.",
+                    fontFamily = MetroFonts.text,
+                    fontSize = 12.sp,
+                    color = scheme.textDim,
+                )
             }
-            Text(
-                "Уровень рассуждений. OpenRouter — reasoning.effort, остальные OpenAI-совместимые (Zen) — reasoning_effort. Если модель не поддерживает — запрос повторится без него.",
-                fontFamily = MetroFonts.text,
-                fontSize = 12.sp,
-                color = scheme.textDim,
-            )
         }
     }
 }

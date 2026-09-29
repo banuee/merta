@@ -27,7 +27,8 @@ class MertaSettings(context: Context) {
         const val MEDIUM = "medium"
         const val HIGH = "high"
         const val XHIGH = "xhigh"
-        val ALL = listOf(MINIMAL, LOW, MEDIUM, HIGH, XHIGH)
+        const val MAX = "max"
+        val ALL = listOf(MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX)
     }
 
     object Presets {

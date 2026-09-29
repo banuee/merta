@@ -17,7 +17,9 @@ class AgyModelsTest {
         assertEquals(2, models.size)
         assertEquals("gemini-3.8-flash", models[0].id)
         assertEquals("Gemini 3.8 Flash", models[0].displayName)
+        assertEquals(listOf("low", "medium", "high", "max"), models[0].supportedEfforts)
         assertEquals("claude-sonnet-4-6", models[1].id)
+        assertEquals(emptyList<String>(), models[1].supportedEfforts)
     }
 
     @Test

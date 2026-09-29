@@ -29,7 +29,9 @@ object ModelsJson {
             val id = SseParser.extractStringAfterKey(obj, "id", 0)
             if (!id.isNullOrBlank()) {
                 val name = SseParser.extractStringAfterKey(obj, "name", 0) ?: ""
-                out.add(LlmModel(id, name, promptPer1M(obj), completionPer1M(obj), reasoningSupported(obj)))
+                val supported = reasoningSupported(obj)
+                val efforts = supportedEfforts(id, obj, supported)
+                out.add(LlmModel(id, name, promptPer1M(obj), completionPer1M(obj), supported, efforts))
             }
             i = end
         }
@@ -64,6 +66,22 @@ object ModelsJson {
         }
         val params = obj.substring(arr, end.coerceAtMost(obj.length)).lowercase()
         return "reasoning" in params || "effort" in params
+    }
+
+    /**
+     * Конкретные уровни effort для модели (из ID и параметров каталога):
+     * - grok/xAI: minimal, low, medium, high, xhigh
+     * - gemini/gpt/o-серия: low, medium, high
+     * - без reasoning: пусто
+     */
+    fun supportedEfforts(id: String, obj: String, reasoningSupported: Boolean): List<String> {
+        if (!reasoningSupported) return emptyList()
+        val lowerId = id.lowercase()
+        return if (lowerId.contains("grok") || lowerId.startsWith("x-ai/")) {
+            listOf("minimal", "low", "medium", "high", "xhigh")
+        } else {
+            listOf("low", "medium", "high")
+        }
     }
 
     /** $ за токен (строкой или числом) → $ за 1M токенов. */

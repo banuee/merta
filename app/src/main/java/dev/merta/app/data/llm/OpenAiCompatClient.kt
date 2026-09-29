@@ -30,6 +30,7 @@ class OpenAiCompatClient(
 
     override val id: String = "openai-compat"
 
+    private val callLock = Any()
     @Volatile
     private var currentCall: okhttp3.Call? = null
 
@@ -73,7 +74,10 @@ class OpenAiCompatClient(
 
     /** Отмена активного стрима (новый вопрос, выход). */
     fun cancel() {
-        currentCall?.cancel()
+        synchronized(callLock) {
+            currentCall?.cancel()
+            currentCall = null
+        }
     }
 
     /** Колбэки агентного цикла (UI решает approve, показывает прогресс). */
@@ -184,7 +188,9 @@ class OpenAiCompatClient(
             .header("Accept", "text/event-stream")
         for ((k, v) in extraHeaders) reqBuilder.header(k, v)
         val call = http.newCall(reqBuilder.post(body.toRequestBody(JSON)).build())
-        currentCall = call
+        synchronized(callLock) {
+            currentCall = call
+        }
         try {
             call.execute().use { resp ->
                 if (!resp.isSuccessful) {
@@ -259,7 +265,9 @@ class OpenAiCompatClient(
             if (call.isCanceled()) throw LlmException(-2, "отменено")
             throw LlmException(-1, "сеть: ${e.message}")
         } finally {
-            if (currentCall === call) currentCall = null
+            synchronized(callLock) {
+                if (currentCall === call) currentCall = null
+            }
         }
     }
 
@@ -369,7 +377,9 @@ class OpenAiCompatClient(
             .header("Accept", "text/event-stream")
         for ((k, v) in extraHeaders) reqBuilder.header(k, v)
         val call = http.newCall(reqBuilder.post(body.toRequestBody(JSON)).build())
-        currentCall = call
+        synchronized(callLock) {
+            currentCall = call
+        }
         try {
             call.execute().use { resp ->
                 if (!resp.isSuccessful) {
@@ -418,7 +428,9 @@ class OpenAiCompatClient(
             if (call.isCanceled()) throw LlmException(-2, "отменено")
             throw LlmException(-1, "сеть: ${e.message}")
         } finally {
-            if (currentCall === call) currentCall = null
+            synchronized(callLock) {
+                if (currentCall === call) currentCall = null
+            }
         }
     }
 

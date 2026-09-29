@@ -15,13 +15,15 @@ import dev.merta.app.data.llm.LlmModel
  */
 object AgyModels {
 
+    val AGY_EFFORTS = listOf("low", "medium", "high", "max")
+
     val FALLBACK = listOf(
-        LlmModel("gemini-3.8-flash", "Gemini 3.8 Flash"),
-        LlmModel("gemini-3.7-flash", "Gemini 3.7 Flash"),
-        LlmModel("gemini-3.1-pro", "Gemini 3.1 Pro"),
-        LlmModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-        LlmModel("claude-opus-4-6-thinking", "Claude Opus 4.6 Thinking"),
-        LlmModel("gpt-oss-120b", "GPT-OSS 120B"),
+        LlmModel("gemini-3.8-flash", "Gemini 3.8 Flash", reasoningSupported = true, supportedEfforts = AGY_EFFORTS),
+        LlmModel("gemini-3.7-flash", "Gemini 3.7 Flash", reasoningSupported = true, supportedEfforts = AGY_EFFORTS),
+        LlmModel("gemini-3.1-pro", "Gemini 3.1 Pro", reasoningSupported = true, supportedEfforts = AGY_EFFORTS),
+        LlmModel("claude-sonnet-4-6", "Claude Sonnet 4.6", reasoningSupported = false, supportedEfforts = emptyList()),
+        LlmModel("claude-opus-4-6-thinking", "Claude Opus 4.6 Thinking", reasoningSupported = false, supportedEfforts = emptyList()),
+        LlmModel("gpt-oss-120b", "GPT-OSS 120B", reasoningSupported = true, supportedEfforts = AGY_EFFORTS),
     )
 
     fun parse(raw: String): List<LlmModel> {
@@ -46,7 +48,11 @@ object AgyModels {
                 grouped.getOrPut(id) { GroupAcc(id, displayName(id, name)) }
             }
         }
-        return grouped.values.map { LlmModel(it.id, it.name.ifBlank { it.id }) }
+        return grouped.values.map {
+            val supported = it.id.startsWith("gemini") || it.id.startsWith("gpt-oss")
+            val efforts = if (supported) AGY_EFFORTS else emptyList()
+            LlmModel(it.id, it.name.ifBlank { it.id }, reasoningSupported = supported, supportedEfforts = efforts)
+        }
     }
 
     private class GroupAcc(val id: String, var name: String)

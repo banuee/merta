@@ -6,6 +6,8 @@ import dev.merta.app.adb.ShizukuOpsImpl
 import dev.merta.app.data.workspace.FileGateway
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Выполнение инструментов. Чистые эвристики (поиск файлов, чтение кусками) —
@@ -187,20 +189,22 @@ class ToolRegistry(
         }
         val dirFile = File(dir)
         if (!dirFile.isDirectory) return "error: нет папки: $dir"
-        return try {
-            val proc = ProcessBuilder("/system/bin/sh", "-c", command)
-                .directory(dirFile)
-                .redirectErrorStream(true)
-                .start()
-            val finished = proc.waitFor(60, TimeUnit.SECONDS)
-            if (!finished) {
-                proc.destroyForcibly()
-                return "error: таймаут 60с"
+        return withContext(Dispatchers.IO) {
+            try {
+                val proc = ProcessBuilder("/system/bin/sh", "-c", command)
+                    .directory(dirFile)
+                    .redirectErrorStream(true)
+                    .start()
+                val finished = proc.waitFor(60, TimeUnit.SECONDS)
+                if (!finished) {
+                    proc.destroyForcibly()
+                    return@withContext "error: таймаут 60с"
+                }
+                val out = proc.inputStream.bufferedReader().readText().take(MAX_OUTPUT)
+                "[exit ${proc.exitValue()}]\n$out".trimEnd()
+            } catch (e: Exception) {
+                "error: ${e.message}"
             }
-            val out = proc.inputStream.bufferedReader().readText().take(MAX_OUTPUT)
-            "[exit ${proc.exitValue()}]\n$out".trimEnd()
-        } catch (e: Exception) {
-            "error: ${e.message}"
         }
     }
 
@@ -352,7 +356,7 @@ class ToolRegistry(
                     if (f.isEmpty()) {
                         "pm list packages"
                     } else {
-                        if (" " in f || ";" in f || "|" in f || '\n' in f) return null
+                        if (f.any { it <= ' ' } || ";" in f || "|" in f || "&" in f) return null
                         "pm list packages ${shQuote(f)}"
                     }
                 }

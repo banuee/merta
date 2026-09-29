@@ -22,6 +22,8 @@ data class LlmModel(
     val completionPer1M: Double = 0.0,
     /** Поддержка reasoning/effort (из supported_parameters; нет данных — true). */
     val reasoningSupported: Boolean = true,
+    /** Допустимые уровни reasoning effort для конкретной модели (пусто — дефолт/не поддерживается). */
+    val supportedEfforts: List<String> = emptyList(),
 ) {
     val displayName: String get() = name.ifBlank { id }
 }

@@ -43,8 +43,21 @@ class ModelsJsonTest {
         val models = ModelsJson.parseModelsList(json)
         assertEquals(3, models.size)
         assertTrue(models[0].reasoningSupported)
+        assertEquals(listOf("low", "medium", "high"), models[0].supportedEfforts)
         assertTrue(!models[1].reasoningSupported)
+        assertEquals(emptyList<String>(), models[1].supportedEfforts)
         assertTrue(models[2].reasoningSupported)
+        assertEquals(listOf("low", "medium", "high"), models[2].supportedEfforts)
+    }
+
+    @Test
+    fun `parses grok effort levels`() {
+        val json = """{"data":[
+            {"id":"x-ai/grok-beta","supported_parameters":["reasoning"]}
+        ]}"""
+        val models = ModelsJson.parseModelsList(json)
+        assertEquals(1, models.size)
+        assertEquals(listOf("minimal", "low", "medium", "high", "xhigh"), models[0].supportedEfforts)
     }
 
     @Test

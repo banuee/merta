@@ -97,9 +97,19 @@ class SessionStore(private val chatsDir: File) {
                 .put("title", title)
                 .put("updatedAt", System.currentTimeMillis())
                 .put("messages", arr)
-            File(chatsDir, "$id.json").writeText(root.toString())
-        } catch (_: Exception) {
-            // История — не критичный путь, молча пропускаем.
+            val target = File(chatsDir, "$id.json")
+            val tmp = File(chatsDir, "$id.json.tmp")
+            tmp.writeText(root.toString())
+            if (!tmp.renameTo(target)) {
+                target.delete()
+                tmp.renameTo(target)
+            }
+        } catch (e: Exception) {
+            try {
+                android.util.Log.w("SessionStore", "Не удалось сохранить сессию $id: ${e.message}")
+            } catch (_: Throwable) {
+                // JVM-тесты без Android mocks
+            }
         }
     }
 

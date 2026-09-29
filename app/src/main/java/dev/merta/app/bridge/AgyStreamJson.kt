@@ -110,13 +110,14 @@ object AgyStreamJson {
     }
 
     /** display_name отклонённых действий (permission request-review без yolo). */
-    private fun parseDenied(t: String, from: Int): List<String> {        val dk = t.indexOf("\"denied_actions\"", from)
+    private fun parseDenied(t: String, from: Int): List<String> {
+        val dk = t.indexOf("\"denied_actions\"", from)
         if (dk < 0) return emptyList()
         val open = t.indexOf('[', dk + 16)
         if (open < 0) return emptyList()
         val end = skipBalanced(t, open) ?: return emptyList()
         val out = mutableListOf<String>()
-        var i = dk
+        var i = open
         while (out.size < 10) {
             val k = t.indexOf("\"display_name\"", i)
             if (k < 0 || k >= end) break

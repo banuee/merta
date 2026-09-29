@@ -187,16 +187,18 @@ fun SessionDrawer(
             }
         }
 
+        val availableEfforts = vm.availableEffortsForCurrent()
+        val supportsEffort = availableEfforts.isNotEmpty()
         Spacer(Modifier.height(8.dp))
         ExpandHeader(
             title = "EFFORT",
-            current = ui.effort ?: "выкл",
-            open = effortOpen,
-            onToggle = { effortOpen = !effortOpen },
+            current = if (!supportsEffort) "недоступен" else (ui.effort ?: "выкл"),
+            open = effortOpen && supportsEffort,
+            onToggle = { if (supportsEffort) effortOpen = !effortOpen },
         )
-        if (!vm.modelSupportsEffort()) {
+        if (!supportsEffort) {
             Text(
-                text = "модель без reasoning — effort не отправится",
+                text = "модель без reasoning — effort не поддерживается",
                 fontFamily = MetroFonts.text,
                 fontSize = 12.sp,
                 color = scheme.textDim,
@@ -204,13 +206,13 @@ fun SessionDrawer(
             )
         }
         AnimatedVisibility(
-            visible = effortOpen,
+            visible = effortOpen && supportsEffort,
             enter = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(180)),
             exit = shrinkVertically(animationSpec = tween(200)) + fadeOut(animationSpec = tween(150)),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 EffortPickRow("Выкл", ui.effort == null) { vm.setEffort(null); effortOpen = false }
-                for (e in MertaSettings.Efforts.ALL) {
+                for (e in availableEfforts) {
                     EffortPickRow(e, ui.effort == e) { vm.setEffort(e); effortOpen = false }
                 }
             }

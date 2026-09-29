@@ -57,7 +57,7 @@ object SseParser {
                 while (true) {
                     val tIdx = chunkJson.indexOf("\"$key\"", i)
                     if (tIdx < 0 || tIdx >= arrEnd) break
-                    extractStringAfterKey(chunkJson, key, i)?.let {
+                    extractStringAfterKey(chunkJson, key, tIdx)?.let {
                         if (it.isNotEmpty()) pieces.add(tIdx to it)
                     }
                     i = tIdx + key.length + 2

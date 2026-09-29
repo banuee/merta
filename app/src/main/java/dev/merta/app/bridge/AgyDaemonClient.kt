@@ -63,7 +63,7 @@ class AgyDaemonClient(
                     patchOutput = SseParser.extractStringAfterKey(body, "output", 0) ?: "",
                     patcherBin = SseParser.extractStringAfterKey(body, "patcher_bin", 0) ?: "",
                     rishBin = SseParser.extractStringAfterKey(body, "rish_bin", 0) ?: "",
-                    rishOk = body.contains("\"rish_ok\": true"),
+                    rishOk = body.contains("\"rish_ok\":true") || body.contains("\"rish_ok\": true"),
                 )
             }
         } catch (e: IOException) {

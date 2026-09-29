@@ -36,9 +36,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "daemon.log")
 CONFIG = os.path.join(HERE, "config.json")
 
-DEFAULT_MODEL = "gemini-3.8-flash"
-SAFE_MODEL = re.compile(r"^[a-zA-Z0-9._-]+$")
-
 # Маркеры закэшированных credentials agy (лежат в HOME, где логинились).
 CRED_MARKERS = (".config/antigravity", ".agy", ".config/agy", ".antigravity",
                 ".config/google-antigravity")
@@ -143,12 +140,21 @@ def run_rish(cmd_text, timeout=60):
     return p.returncode, (p.stdout + p.stderr)[-20000:]
 
 
+_rish_cache = [False, 0.0]
+
+
 def rish_probe():
     if not RISH:
         return False
+    now = time.time()
+    if now - _rish_cache[1] < 60:
+        return _rish_cache[0]
     try:
         rc, _ = run_rish("id", timeout=15)
-        return rc == 0
+        ok = (rc == 0)
+        _rish_cache[0] = ok
+        _rish_cache[1] = now
+        return ok
     except Exception:
         return False
 

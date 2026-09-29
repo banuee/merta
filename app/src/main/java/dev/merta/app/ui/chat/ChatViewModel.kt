@@ -82,7 +82,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** Последний известный скоуп папок (для системного сообщения — модель должна знать все корни). */
     private val scopeState = MutableStateFlow<WorkspaceScope?>(null)
     /** Текущий Thought хода (для onReasoning/onApproval между onTurnStart). */
+    @Volatile
     private var currentThoughtId: Long? = null
+    @Volatile
     private var currentThoughtStart = 0L
 
     private fun toolRegistry(): ToolRegistry {
@@ -129,7 +131,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val quotaLoading = MutableStateFlow(false)
     /** Ошибка последнего запроса лимитов (показ в шторке вместо вечного хинта). */
     val quotaError = MutableStateFlow<String?>(null)
-    private var quotaFetching = false
+    private val quotaFetching = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Статус Shizuku для настроек (обновляется по запросу). */
     val shizukuStatus = MutableStateFlow(dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING)
@@ -428,20 +430,66 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isAgyActive(): Boolean = settings.activeProvider()?.isAgy == true
 
+    /** Доступные уровни effort для текущей выбранной модели. */
+    fun availableEffortsForCurrent(): List<String> {
+        val p = settings.activeProvider() ?: return MertaSettings.Efforts.ALL
+        val model = settings.selectedModel(p.id)
+        if (p.isAgy) {
+            val modelObj = _state.value.groups.find { it.provider.id == p.id }
+                ?.models?.find { it.id == model }
+            if (modelObj != null) return modelObj.supportedEfforts
+            if (model.startsWith("gemini") || model.startsWith("gpt-oss")) {
+                return dev.merta.app.bridge.AgyModels.AGY_EFFORTS
+            }
+            return emptyList()
+        }
+        val modelObj = _state.value.groups.find { it.provider.id == p.id }
+            ?.models?.find { it.id == model }
+        if (modelObj != null) {
+            if (!modelObj.reasoningSupported) return emptyList()
+            if (modelObj.supportedEfforts.isNotEmpty()) return modelObj.supportedEfforts
+        }
+        // Эвристика по ID модели, если каталог ещё не загружен
+        if (model.contains("grok", ignoreCase = true) || model.startsWith("x-ai/")) {
+            return listOf(
+                MertaSettings.Efforts.MINIMAL,
+                MertaSettings.Efforts.LOW,
+                MertaSettings.Efforts.MEDIUM,
+                MertaSettings.Efforts.HIGH,
+                MertaSettings.Efforts.XHIGH,
+            )
+        }
+        if (!modelSupportsEffort()) return emptyList()
+        return listOf(
+            MertaSettings.Efforts.LOW,
+            MertaSettings.Efforts.MEDIUM,
+            MertaSettings.Efforts.HIGH,
+        )
+    }
+
     /** Effort для запроса: null, если модель из каталога явно без reasoning. */
     fun effortForRequest(): String? {
         val e = settings.load().effort ?: return null
-        val p = settings.activeProvider() ?: return e
-        val model = settings.selectedModel(p.id)
-        val flag = _state.value.groups.find { it.provider.id == p.id }
-            ?.models?.find { it.id == model }?.reasoningSupported
-        return if (flag == false) null else e
+        val available = availableEffortsForCurrent()
+        if (available.isEmpty()) return null
+        if (e !in available) {
+            return if (e == MertaSettings.Efforts.MINIMAL) available.first()
+            else if (e == MertaSettings.Efforts.XHIGH || e == MertaSettings.Efforts.MAX) available.last()
+            else available.find { it == MertaSettings.Efforts.MEDIUM } ?: available.first()
+        }
+        return e
     }
 
     /** Поддержка effort текущей моделью (для пометки в меню). */
     fun modelSupportsEffort(): Boolean {
         val p = settings.activeProvider() ?: return true
         val model = settings.selectedModel(p.id)
+        if (p.isAgy) {
+            val modelObj = _state.value.groups.find { it.provider.id == p.id }
+                ?.models?.find { it.id == model }
+            if (modelObj != null) return modelObj.reasoningSupported
+            return model.startsWith("gemini") || model.startsWith("gpt-oss")
+        }
         return _state.value.groups.find { it.provider.id == p.id }
             ?.models?.find { it.id == model }?.reasoningSupported ?: true
     }
@@ -461,8 +509,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val agy = settings.loadProviders().find { it.isAgy } ?: return
         val cached = quotaState.value
         if (!force && cached != null && System.currentTimeMillis() - cached.fetchedAt < 5 * 60 * 1000) return
-        if (quotaFetching) return
-        quotaFetching = true
+        if (!quotaFetching.compareAndSet(false, true)) return
         quotaLoading.value = true
         quotaError.value = null
         viewModelScope.launch(Dispatchers.IO) {
@@ -482,7 +529,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 quotaError.value = "не подтянулось — жми ⟳"
             } finally {
                 quotaLoading.value = false
-                quotaFetching = false
+                quotaFetching.set(false)
             }
         }
     }
@@ -579,7 +626,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 },
         )
-        val client = makeProvider(provider) as OpenAiCompatClient
+        val client = makeProvider(provider) as? OpenAiCompatClient ?: run {
+            push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Провайдер «${provider.name}» не OpenAI-совместимый."))
+            return
+        }
         activeClient = client
         // Effort шлём всем провайдерам (протокол у всех OpenAI-совместимый,
         // 400-фолбэк в клиенте срежет неподдерживаемое), кроме моделей,
@@ -813,6 +863,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         activeAgy = null
         approvalGate?.cancel()
         approvalGate = null
+        // Иначе onReasoning после отмены пишет в уже завершённый Thought.
+        currentThoughtId = null
         val partial = _state.value.streaming
         val now = System.currentTimeMillis()
         _state.update { st ->
