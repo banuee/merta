@@ -88,6 +88,15 @@ class AgyStreamJsonTest {
     }
 
     @Test
+    fun `parses step_update with usage`() {
+        val line = """{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"done","usage":{"input_tokens":15000,"output_tokens":178,"thinking_tokens":122}}}"""
+        val evs = AgyStreamJson.parseLine(line)
+        assertEquals(2, evs.size)
+        assertEquals(AgyEvent.Usage(AgyStreamJson.TurnUsage(15000, 178, 122)), evs[0])
+        assertEquals(AgyEvent.Delta("done"), evs[1])
+    }
+
+    @Test
     fun `ignores non-response steps`() {
         val line = """{"event":"step_update","step_update":{"step_type":"checkpoint","summary":"saved"}}"""
         assertTrue(AgyStreamJson.parseLine(line).isEmpty())

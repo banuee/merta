@@ -43,4 +43,27 @@ class SessionUsageTest {
         assertEquals("$0.031", SessionUsage.formatCost(0.0312))
         assertTrue(SessionUsage.formatCost(1.5).startsWith("$1.5"))
     }
+
+    @Test
+    fun `estimateTokens handles cyrillic and ascii`() {
+        val eng = SessionUsage.estimateTokens("Hello world! This is a test.")
+        assertTrue("English estimation should be positive: $eng", eng in 6L..10L)
+        val rus = SessionUsage.estimateTokens("Привет, как дела? Напиши код на Kotlin")
+        assertTrue("Russian estimation should be positive: $rus", rus in 12L..20L)
+    }
+
+    @Test
+    fun `estimateFromMessages accounts for roles`() {
+        val msgs = listOf(
+            dev.merta.app.ui.chat.ChatMessage(1, dev.merta.app.ui.chat.ChatMessage.Role.USER, "Привет, мир!"),
+            dev.merta.app.ui.chat.ChatMessage(2, dev.merta.app.ui.chat.ChatMessage.Role.ASSISTANT, "Привет! Чем могу помочь?"),
+        )
+        val est = SessionUsage.estimateFromMessages(msgs)
+        assertTrue(est.input > 0)
+        assertTrue(est.output > 0)
+        assertEquals(0L, est.thinking)
+        assertTrue(est.total() > 0)
+        assertTrue(est.detailString().contains("вх"))
+        assertTrue(est.detailString().contains("вых"))
+    }
 }

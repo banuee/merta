@@ -42,6 +42,25 @@ class SessionTitleTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun `saves and loads usage`() {
+        val dir = java.nio.file.Files.createTempDirectory("session-test").toFile()
+        try {
+            val store = SessionStore(dir)
+            val msg = listOf(
+                dev.merta.app.ui.chat.ChatMessage(1, dev.merta.app.ui.chat.ChatMessage.Role.USER, "Привет"),
+            )
+            val u = SessionUsage(120, 45, 10)
+            store.save("s2", "Заголовок", msg, usage = u)
+            val loadedU = store.loadUsage("s2")
+            assertEquals(120L, loadedU?.input)
+            assertEquals(45L, loadedU?.output)
+            assertEquals(10L, loadedU?.thinking)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }
 
 class FrontmatterTest {

@@ -192,6 +192,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 currentTitle = last.title
                 nextId = (loaded.maxOfOrNull { it.id } ?: 0) + 1
                 sessions.loadConversationId(last.id)?.let { agyConversations[last.id] = it }
+                usageState.value = sessions.loadUsage(last.id) ?: dev.merta.app.data.chat.SessionUsage.estimateFromMessages(loaded)
                 _state.update { it.copy(sessionId = last.id, messages = loaded) }
             } else {
                 val id = sessions.newId()
@@ -363,7 +364,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         currentTitle = meta.title
         nextId = (loaded.maxOfOrNull { it.id } ?: 0) + 1
         sessions.loadConversationId(id)?.let { agyConversations[id] = it }
-        usageState.value = dev.merta.app.data.chat.SessionUsage()
+        usageState.value = sessions.loadUsage(id) ?: dev.merta.app.data.chat.SessionUsage.estimateFromMessages(loaded)
         quotaState.value = null
         quotaLoading.value = false
         quotaError.value = null
@@ -732,6 +733,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         },
                     )
                 }
+                if (usageState.value.total() == 0L && _state.value.messages.isNotEmpty()) {
+                    usageState.value = dev.merta.app.data.chat.SessionUsage.estimateFromMessages(_state.value.messages)
+                }
                 currentThoughtId = null
                 activeClient = null
                 persist()
@@ -811,6 +815,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             newTurn()
                         }
                     }
+                    var stepCountedIn = 0L
+                    var stepCountedOut = 0L
+                    var stepCountedThinking = 0L
                     daemon.runStream(
                         dev.merta.app.bridge.AgyDaemonClient.AgyRun(
                             prompt = prompt,
@@ -844,12 +851,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                     currentThoughtId?.let { addThinkStep(it, "→ " + ev.output.take(300)) }
                                 }
                             }
+                            is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Usage -> {
+                                stepCountedIn += ev.usage.input
+                                stepCountedOut += ev.usage.output
+                                stepCountedThinking += ev.usage.thinking
+                                usageState.update { it.add(ev.usage.input, ev.usage.output, ev.usage.thinking) }
+                            }
                             is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Done -> {
                                 needThought()
                                 if (ev.conversationId.isNotBlank()) {
                                     agyConversations[sessionId] = ev.conversationId
                                 }
-                                usageState.update { it.add(ev.usage.input, ev.usage.output, ev.usage.thinking) }
+                                val remIn = (ev.usage.input - stepCountedIn).coerceAtLeast(0L)
+                                val remOut = (ev.usage.output - stepCountedOut).coerceAtLeast(0L)
+                                val remThinking = (ev.usage.thinking - stepCountedThinking).coerceAtLeast(0L)
+                                if (remIn > 0 || remOut > 0 || remThinking > 0) {
+                                    usageState.update { it.add(remIn, remOut, remThinking) }
+                                }
                                 // Стрим уже показал текст — дубли не пушим, только новое.
                                 val streamed = _state.value.streaming.orEmpty()
                                 val r = ev.response.trim()
@@ -872,6 +890,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                 }
                             }
                             is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Error -> {
+                                val remIn = (ev.usage.input - stepCountedIn).coerceAtLeast(0L)
+                                val remOut = (ev.usage.output - stepCountedOut).coerceAtLeast(0L)
+                                val remThinking = (ev.usage.thinking - stepCountedThinking).coerceAtLeast(0L)
+                                if (remIn > 0 || remOut > 0 || remThinking > 0) {
+                                    usageState.update { it.add(remIn, remOut, remThinking) }
+                                }
                                 throw LlmException(-1, agyErrorText(ev.message))
                             }
                         }
@@ -905,6 +929,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         },
                     )
+                }
+                if (usageState.value.total() == 0L && _state.value.messages.isNotEmpty()) {
+                    usageState.value = dev.merta.app.data.chat.SessionUsage.estimateFromMessages(_state.value.messages)
                 }
                 currentThoughtId = null
                 activeAgy = null
@@ -981,10 +1008,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val msgs = s.messages
             val sessionId = s.sessionId
             val convId = agyConversations[sessionId]
+            val currentUsage = if (usageState.value.total() > 0) {
+                usageState.value
+            } else {
+                dev.merta.app.data.chat.SessionUsage.estimateFromMessages(msgs)
+            }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     persistMutex.withLock {
-                        sessions.save(sessionId, title, msgs, convId)
+                        sessions.save(sessionId, title, msgs, convId, currentUsage)
                     }
                     withContext(Dispatchers.Main) {
                         refreshSessions()

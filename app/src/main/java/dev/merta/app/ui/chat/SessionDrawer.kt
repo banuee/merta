@@ -59,6 +59,7 @@ fun SessionDrawer(
     val scheme = LocalMetroScheme.current
     val ui by vm.state.collectAsState()
     val usage by vm.usageState.collectAsState()
+    val effectiveUsage = if (usage.total() > 0) usage else SessionUsage.estimateFromMessages(ui.messages)
     val quotaGroup = vm.quotaForCurrent()
     val quotaLoading by vm.quotaLoading.collectAsState()
     val quotaError by vm.quotaError.collectAsState()
@@ -102,14 +103,14 @@ fun SessionDrawer(
                 hasData = hasQuotaData,
                 loading = quotaLoading,
                 error = quotaError,
-                usage = usage,
+                usage = effectiveUsage,
                 onRefresh = { vm.refreshQuota(force = true) },
             )
         } else {
             CostCard(
                 providerName = ui.providerName,
                 modelName = ui.modelDisplayName,
-                usage = usage,
+                usage = effectiveUsage,
                 pricing = vm.pricingForCurrent(),
             )
         }
@@ -323,8 +324,7 @@ private fun CostCard(
             color = scheme.text,
         )
         Text(
-            text = "контекст: ${SessionUsage.formatTokens(usage.total())} ток. " +
-                "(вх ${SessionUsage.formatTokens(usage.input)} / вых ${SessionUsage.formatTokens(usage.output)})",
+            text = "контекст: ${SessionUsage.formatTokens(usage.total())} ток. (${usage.detailString()})",
             fontFamily = MetroFonts.text,
             fontSize = 13.sp,
             color = scheme.textDim,
@@ -421,7 +421,8 @@ private fun QuotaCard(
             }
         }
         Text(
-            text = "сессия: ${SessionUsage.formatTokens(usage.total())} ток.",
+            text = "сессия: ${SessionUsage.formatTokens(usage.total())} ток." +
+                (if (usage.total() > 0) " (${usage.detailString()})" else ""),
             fontFamily = MetroFonts.text,
             fontSize = 13.sp,
             color = scheme.textDim,

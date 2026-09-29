@@ -46,5 +46,58 @@ data class SessionUsage(
         } else {
             "$%.2f".format(LOCALE, usd)
         }
+
+        /**
+         * Быстрая и точная эвристика подсчёта токенов по тексту:
+         * - Кириллица: ~2.2 символа на BPE-токен (русский язык);
+         * - Латиница/цифры/пробелы: ~3.8 символа на токен;
+         * - Знаки препинания / спецсимволы / CJK: ~1.8 символа на токен.
+         */
+        fun estimateTokens(text: String): Long {
+            if (text.isEmpty()) return 0L
+            var cyrillic = 0
+            var ascii = 0
+            var other = 0
+            for (ch in text) {
+                when (ch) {
+                    in 'a'..'z', in 'A'..'Z', in '0'..'9', ' ', '\n', '\t' -> ascii++
+                    in 'а'..'я', in 'А'..'Я', 'ё', 'Ё' -> cyrillic++
+                    else -> other++
+                }
+            }
+            val est = (cyrillic / 2.2) + (ascii / 3.8) + (other / 1.8)
+            return est.toLong().coerceAtLeast(1L)
+        }
+
+        /** Оценка контекста и использования по списку сообщений сессии. */
+        fun estimateFromMessages(messages: List<dev.merta.app.ui.chat.ChatMessage>): SessionUsage {
+            var input = 0L
+            var output = 0L
+            var thinking = 0L
+            for (m in messages) {
+                when (m.role) {
+                    dev.merta.app.ui.chat.ChatMessage.Role.USER -> {
+                        input += estimateTokens(m.text) + 4L
+                    }
+                    dev.merta.app.ui.chat.ChatMessage.Role.ASSISTANT -> {
+                        output += estimateTokens(m.text) + 4L
+                    }
+                    dev.merta.app.ui.chat.ChatMessage.Role.THINKING -> {
+                        val t = m.thought
+                        val thoughtText = (t?.steps?.joinToString("\n") ?: "") + "\n" + (t?.reasoning ?: "")
+                        thinking += estimateTokens(thoughtText)
+                    }
+                    dev.merta.app.ui.chat.ChatMessage.Role.SYSTEM -> {
+                        input += estimateTokens(m.text) + 4L
+                    }
+                }
+            }
+            return SessionUsage(input = input, output = output, thinking = thinking)
+        }
+    }
+
+    fun detailString(): String {
+        val base = "вх ${formatTokens(input)} / вых ${formatTokens(output)}"
+        return if (thinking > 0) "$base / мыслей ${formatTokens(thinking)}" else base
     }
 }

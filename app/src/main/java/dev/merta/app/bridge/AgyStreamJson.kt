@@ -24,13 +24,14 @@ object AgyStreamJson {
         data class Delta(val text: String) : AgyEvent
         /** Tool-шаг: details — имя + аргументы, output — результат (только DONE). */
         data class Tool(val details: String, val output: String, val done: Boolean) : AgyEvent
+        data class Usage(val usage: TurnUsage) : AgyEvent
         data class Done(
             val response: String,
             val conversationId: String,
             val denied: List<String> = emptyList(),
             val usage: TurnUsage = TurnUsage(),
         ) : AgyEvent
-        data class Error(val message: String) : AgyEvent
+        data class Error(val message: String, val usage: TurnUsage = TurnUsage()) : AgyEvent
     }
 
     fun parseLine(line: String): List<AgyEvent> {
@@ -100,12 +101,13 @@ object AgyStreamJson {
         val conv = convId(t)
         val err = SseParser.extractStringAfterKey(t, "error", from)
             ?: SseParser.extractStringAfterKey(t, "message", from)
+        val usage = parseUsage(t, from)
         return if (err != null || (status.isNotEmpty() && status != "SUCCESS")) {
-            AgyEvent.Error(err ?: status.ifBlank { "неизвестная ошибка agy" })
+            AgyEvent.Error(err ?: status.ifBlank { "неизвестная ошибка agy" }, usage)
         } else if (status == "SUCCESS" || response.isNotEmpty()) {
-            AgyEvent.Done(response, conv, parseDenied(t, from), parseUsage(t, from))
+            AgyEvent.Done(response, conv, parseDenied(t, from), usage)
         } else {
-            AgyEvent.Error(status.ifBlank { "неизвестная ошибка agy" })
+            AgyEvent.Error(status.ifBlank { "неизвестная ошибка agy" }, usage)
         }
     }
 
@@ -139,6 +141,11 @@ object AgyStreamJson {
     }
 
     private fun parseStep(t: String, from: Int): List<AgyEvent> {
+        val events = mutableListOf<AgyEvent>()
+        val u = parseUsage(t, from)
+        if (u.input > 0 || u.output > 0 || u.thinking > 0) {
+            events.add(AgyEvent.Usage(u))
+        }
         val stepType = SseParser.extractStringAfterKey(t, "step_type", from) ?: ""
         if (stepType == "tool") {
             val name = SseParser.extractStringAfterKey(t, "tool_name", from)
@@ -154,10 +161,14 @@ object AgyStreamJson {
                 ""
             }
             val output = rawOut.replace("\r\n", "\n").replace('\r', '\n').take(500)
-            return listOf(AgyEvent.Tool(details, output, done))
+            events.add(AgyEvent.Tool(details, output, done))
+            return events
         }
         val d = SseParser.extractStringAfterKey(t, "text_delta", from)
-        return if (!d.isNullOrEmpty()) listOf(AgyEvent.Delta(d)) else emptyList()
+        if (!d.isNullOrEmpty()) {
+            events.add(AgyEvent.Delta(d))
+        }
+        return events
     }
 
     /** Короткая подпись вызова: имя + аргументы (одно значение — как есть). */

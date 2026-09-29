@@ -87,7 +87,29 @@ class SessionStore(private val chatsDir: File) {
         }
     }
 
-    fun save(id: String, title: String, messages: List<ChatMessage>, conversationId: String? = null) {
+    fun loadUsage(id: String): SessionUsage? {
+        val f = File(chatsDir, "$id.json")
+        if (!f.exists()) return null
+        return try {
+            val root = JSONObject(f.readText())
+            val u = root.optJSONObject("usage") ?: return null
+            SessionUsage(
+                input = u.optLong("input", 0L),
+                output = u.optLong("output", 0L),
+                thinking = u.optLong("thinking", 0L),
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun save(
+        id: String,
+        title: String,
+        messages: List<ChatMessage>,
+        conversationId: String? = null,
+        usage: SessionUsage? = null,
+    ) {
         try {
             chatsDir.mkdirs()
             val arr = JSONArray()
@@ -109,6 +131,14 @@ class SessionStore(private val chatsDir: File) {
                 .put("messages", arr)
             if (!conversationId.isNullOrBlank()) {
                 root.put("conversationId", conversationId)
+            }
+            val u = usage ?: SessionUsage.estimateFromMessages(messages)
+            if (u.total() > 0) {
+                val uObj = JSONObject()
+                    .put("input", u.input)
+                    .put("output", u.output)
+                    .put("thinking", u.thinking)
+                root.put("usage", uObj)
             }
             val target = File(chatsDir, "$id.json")
             val tmp = File(chatsDir, "$id.json.tmp")
