@@ -16,12 +16,20 @@ import dev.merta.app.data.llm.SseParser
  */
 object AgyStreamJson {
 
+    /** Токены хода (result.usage). */
+    data class TurnUsage(val input: Long = 0L, val output: Long = 0L, val thinking: Long = 0L)
+
     sealed interface AgyEvent {
         data class Init(val conversationId: String) : AgyEvent
         data class Delta(val text: String) : AgyEvent
         /** Tool-шаг: details — имя + аргументы, output — результат (только DONE). */
         data class Tool(val details: String, val output: String, val done: Boolean) : AgyEvent
-        data class Done(val response: String, val conversationId: String, val denied: List<String> = emptyList()) : AgyEvent
+        data class Done(
+            val response: String,
+            val conversationId: String,
+            val denied: List<String> = emptyList(),
+            val usage: TurnUsage = TurnUsage(),
+        ) : AgyEvent
         data class Error(val message: String) : AgyEvent
     }
 
@@ -50,7 +58,7 @@ object AgyStreamJson {
         val response = SseParser.extractStringAfterKey(t, "response", from) ?: ""
         val conv = convId(t)
         return if (status == "SUCCESS" || (status.isEmpty() && response.isNotEmpty())) {
-            AgyEvent.Done(response, conv, parseDenied(t, from))
+            AgyEvent.Done(response, conv, parseDenied(t, from), parseUsage(t, from))
         } else {
             val err = SseParser.extractStringAfterKey(t, "error", from)
                 ?: SseParser.extractStringAfterKey(t, "message", from)
@@ -59,9 +67,19 @@ object AgyStreamJson {
         }
     }
 
+    /** Токены хода из result.usage (нет — нули). */
+    private fun parseUsage(t: String, from: Int): TurnUsage {
+        val ui = t.indexOf("\"usage\"", from)
+        if (ui < 0) return TurnUsage()
+        return TurnUsage(
+            input = SseParser.extractLongAfterKey(t, "input_tokens", ui) ?: 0L,
+            output = SseParser.extractLongAfterKey(t, "output_tokens", ui) ?: 0L,
+            thinking = SseParser.extractLongAfterKey(t, "thinking_tokens", ui) ?: 0L,
+        )
+    }
+
     /** display_name отклонённых действий (permission request-review без yolo). */
-    private fun parseDenied(t: String, from: Int): List<String> {
-        val dk = t.indexOf("\"denied_actions\"", from)
+    private fun parseDenied(t: String, from: Int): List<String> {        val dk = t.indexOf("\"denied_actions\"", from)
         if (dk < 0) return emptyList()
         val open = t.indexOf('[', dk + 16)
         if (open < 0) return emptyList()

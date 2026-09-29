@@ -14,8 +14,13 @@ data class LlmRequest(
     val effort: String? = null,
 )
 
-/** Модель из каталога провайдера (`GET /models`). */
-data class LlmModel(val id: String, val name: String) {
+/** Модель из каталога провайдера (`GET /models`). Цены — $ за 1M токенов (0 = неизвестны). */
+data class LlmModel(
+    val id: String,
+    val name: String,
+    val promptPer1M: Double = 0.0,
+    val completionPer1M: Double = 0.0,
+) {
     val displayName: String get() = name.ifBlank { id }
 }
 

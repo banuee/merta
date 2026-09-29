@@ -3,15 +3,19 @@ package dev.merta.app.ui.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +33,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -55,12 +61,14 @@ import dev.merta.app.ui.theme.metroClickable
 
 /**
  * Главный экран: шапка Metro, пузыри модели/effort, лента, ввод.
+ * Шторки: свайп влево — сессия (справа), свайп вправо — история (слева).
  */
+private enum class Drawer { LEFT, RIGHT }
+
 @Composable
 fun ChatScreen(
     vm: ChatViewModel,
     onOpenSettings: () -> Unit,
-    onOpenSessions: () -> Unit,
     onNewChat: () -> Unit,
     onOpenModels: () -> Unit,
 ) {
@@ -72,6 +80,13 @@ fun ChatScreen(
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
     var editText by remember { mutableStateOf("") }
     val clip = LocalClipboardManager.current
+    var drawer by remember { mutableStateOf<Drawer?>(null) }
+    var dragTotal by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(drawer) {
+        if (drawer == Drawer.LEFT) vm.refreshSessions()
+        if (drawer == Drawer.RIGHT && vm.isAgyActive()) vm.refreshQuota()
+    }
 
     if (editing != null) {
         EditMessageDialog(
@@ -108,11 +123,38 @@ fun ChatScreen(
         )
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .imePadding()
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 12.dp)
+            .pointerInput(drawer) {
+                detectHorizontalDragGestures(
+                    onDragEnd = { dragTotal = 0f },
+                    onDragCancel = { dragTotal = 0f },
+                    onHorizontalDrag = { _, amount ->
+                        dragTotal += amount
+                        if (drawer == null) {
+                            if (dragTotal < -90) {
+                                drawer = Drawer.RIGHT
+                                dragTotal = 0f
+                            } else if (dragTotal > 90) {
+                                drawer = Drawer.LEFT
+                                dragTotal = 0f
+                            }
+                        } else {
+                            if (drawer == Drawer.RIGHT && dragTotal > 90) {
+                                drawer = null
+                                dragTotal = 0f
+                            } else if (drawer == Drawer.LEFT && dragTotal < -90) {
+                                drawer = null
+                                dragTotal = 0f
+                            }
+                        }
+                    },
+                )
+            },
     ) {
         Row(
             verticalAlignment = Alignment.Top,
@@ -137,9 +179,7 @@ fun ChatScreen(
                         .background(scheme.accent),
                 )
             }
-            HeaderIcon(glyph = "", onClick = onNewChat)
-            HeaderIcon(glyph = "", onClick = onOpenSessions)
-            HeaderIcon(glyph = "", onClick = onOpenSettings)
+            HeaderIcon(glyph = "\uF067", onClick = onNewChat)
         }
 
         // Пузыри модели и effort.
@@ -322,6 +362,51 @@ fun ChatScreen(
                     .padding(horizontal = 18.dp, vertical = 12.dp),
             ) {
                 Text("→", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        }
+    }
+
+        // Шторки поверх контента: свайп влево — сессия справа, вправо — история слева.
+        val open = drawer
+        AnimatedVisibility(
+            visible = open != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .metroClickable(targetScale = 1.0f) { drawer = null },
+            )
+        }
+        AnimatedVisibility(
+            visible = open != null,
+            enter = slideInHorizontally { w -> if (open == Drawer.RIGHT) w else -w } + fadeIn(),
+            exit = slideOutHorizontally { w -> if (open == Drawer.RIGHT) w else -w } + fadeOut(),
+        ) {
+            Box(
+                contentAlignment = if (open == Drawer.LEFT) Alignment.CenterStart else Alignment.CenterEnd,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(0.85f)) {
+                    if (open == Drawer.RIGHT) {
+                        SessionDrawer(
+                            vm = vm,
+                            onOpenSettings = { drawer = null; onOpenSettings() },
+                            onOpenModels = { drawer = null; onOpenModels() },
+                            onClose = { drawer = null },
+                        )
+                    } else {
+                        HistoryDrawer(
+                            sessions = ui.sessions,
+                            currentId = ui.sessionId,
+                            onOpen = { vm.openSession(it); drawer = null },
+                            onDelete = { vm.deleteSession(it) },
+                            onNew = { vm.newChat(); drawer = null },
+                        )
+                    }
+                }
             }
         }
     }

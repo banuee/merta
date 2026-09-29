@@ -73,6 +73,8 @@ class AgentLoopTest {
                     approvals++
                     return true
                 }
+
+                override fun onUsage(inputTokens: Long, outputTokens: Long) {}
             },
         )
         assertEquals("got it", text)
@@ -101,6 +103,7 @@ class AgentLoopTest {
             toolsSeen.add(name)
         }
         override suspend fun onApproval(approval: PendingApproval): Boolean = true
+        override fun onUsage(inputTokens: Long, outputTokens: Long) {}
     }
 
     @Test
@@ -121,6 +124,37 @@ class AgentLoopTest {
         )
         assertEquals("done", text)
         assertEquals(listOf("thinking ", "hard"), reasoningSeen)
+    }
+
+    @Test
+    fun `usage chunks accumulate to onUsage`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3}}\n\n" +
+                    "data: [DONE]\n\n",
+            ),
+        )
+        val client = OpenAiCompatClient(server.url("/v1").toString(), "k")
+        var seen = -1L to -1L
+        val text = client.runAgent(
+            "m", mutableListOf(TurnMessage("user", "hi")), null,
+            ToolRegistry(allowAll, tmp.parent!!),
+            cb = object : OpenAiCompatClient.AgentCallbacks {
+                override fun onDelta(text: String) {}
+                override fun onReasoning(text: String) {}
+                override fun onTurnStart() {}
+                override fun onToolStart(name: String, summary: String) {}
+                override suspend fun onApproval(approval: PendingApproval): Boolean = true
+                override fun onUsage(inputTokens: Long, outputTokens: Long) {
+                    seen = inputTokens to outputTokens
+                }
+            },
+        )
+        assertEquals("hi", text)
+        assertEquals(10L to 3L, seen)
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"stream_options\":{\"include_usage\":true}"))
     }
 
     @Test

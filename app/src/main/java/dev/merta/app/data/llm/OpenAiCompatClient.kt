@@ -88,6 +88,9 @@ class OpenAiCompatClient(
 
         fun onToolStart(name: String, summary: String)
         suspend fun onApproval(approval: PendingApproval): Boolean
+
+        /** Токены хода (usage из SSE) — UI копит статистику сессии. */
+        fun onUsage(inputTokens: Long, outputTokens: Long)
     }
 
     /**
@@ -135,6 +138,7 @@ class OpenAiCompatClient(
             if (t.text.isNotBlank()) {
                 totalText.append(t.text)
             }
+            cb.onUsage(t.inputTokens, t.outputTokens)
             if (t.toolCalls.isEmpty() || !toolsCur) {
                 if (t.text.isNotBlank()) {
                     transcript.add(TurnMessage("assistant", t.text))
@@ -156,7 +160,12 @@ class OpenAiCompatClient(
         return totalText.toString()
     }
 
-    private data class AgentTurn(val text: String, val toolCalls: List<OutToolCall>)
+    private data class AgentTurn(
+        val text: String,
+        val toolCalls: List<OutToolCall>,
+        val inputTokens: Long = 0L,
+        val outputTokens: Long = 0L,
+    )
 
     private fun postAgentTurn(
         model: String,
@@ -192,6 +201,8 @@ class OpenAiCompatClient(
                     ?: throw LlmException(-1, "пустое тело ответа")
                 val full = StringBuilder()
                 val frags = mutableMapOf<Int, FragAcc>()
+                var turnInput = 0L
+                var turnOutput = 0L
                 fun handlePayload(payload: String) {
                     val delta = SseParser.extractDelta(payload)
                     if (!delta.isNullOrEmpty()) {
@@ -201,6 +212,10 @@ class OpenAiCompatClient(
                     val reasoning = SseParser.extractReasoning(payload)
                     if (!reasoning.isNullOrEmpty()) {
                         onReasoning(reasoning)
+                    }
+                    SseParser.extractUsage(payload)?.let { (p, c) ->
+                        turnInput += p
+                        turnOutput += c
                     }
                     for (frag in ToolCallsJson.extractFrags(payload)) {
                         val acc = frags.getOrPut(frag.index) { FragAcc() }
@@ -240,7 +255,7 @@ class OpenAiCompatClient(
                     if (acc.name.isNullOrBlank()) return@mapNotNull null
                     OutToolCall(acc.id ?: "call-$idx", acc.name!!, acc.args.toString())
                 }
-                return AgentTurn(full.toString(), calls)
+                return AgentTurn(full.toString(), calls, turnInput, turnOutput)
             }
         } catch (e: IOException) {
             if (call.isCanceled()) throw LlmException(-2, "отменено")
@@ -279,6 +294,8 @@ class OpenAiCompatClient(
         val sb = StringBuilder()
         sb.append("{\"model\":\"").append(SseParser.jsonEscape(model)).append('"')
         sb.append(",\"stream\":true")
+        // Usage в финале стрима (OpenRouter) — для статистики сессии.
+        sb.append(",\"stream_options\":{\"include_usage\":true}")
         sb.append(effortFields(effort))
         if (includeTools) {
             sb.append(",\"tools\":").append(ToolDefs.toolsJson())

@@ -65,8 +65,7 @@ class AgyDaemonClient(
      * Каталог моделей: демон отдаёт сырой вывод `agy models`, парсим здесь.
      * Пусто — демон недоступен или CLI без авторизации (тогда UI покажет фолбэк).
      */
-    suspend fun models(): List<dev.merta.app.data.llm.LlmModel> {
-        val call = http.newCall(Request.Builder().url(base() + "/models").get().build())
+    suspend fun models(): List<dev.merta.app.data.llm.LlmModel> {        val call = http.newCall(Request.Builder().url(base() + "/models").get().build())
         try {
             call.execute().use { resp ->
                 val body = resp.body?.string() ?: ""
@@ -75,6 +74,26 @@ class AgyDaemonClient(
                 val code = extractInt(body, "code") ?: -1
                 if (code != 0) return emptyList()
                 return AgyModels.parse(out)
+            }
+        } catch (e: IOException) {
+            return emptyList()
+        }
+    }
+
+    /**
+     * Лимиты (`agy -p /usage` через демон). Пусто — демон недоступен,
+     * CLI без авторизации или другой формат вывода.
+     */
+    suspend fun quota(): List<QuotaGroup> {
+        val call = http.newCall(Request.Builder().url(base() + "/quota").get().build())
+        try {
+            call.execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) return emptyList()
+                val out = SseParser.extractStringAfterKey(body, "output", 0) ?: ""
+                val code = extractInt(body, "code") ?: -1
+                if (code != 0 || out.isBlank()) return emptyList()
+                return QuotaJson.parse(out)
             }
         } catch (e: IOException) {
             return emptyList()

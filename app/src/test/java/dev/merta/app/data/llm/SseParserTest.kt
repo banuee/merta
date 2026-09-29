@@ -27,6 +27,13 @@ class SseParserTest {
     }
 
     @Test
+    fun `extracts usage tokens`() {
+        val chunk = """{"choices":[],"usage":{"prompt_tokens":12242,"completion_tokens":131,"total_tokens":12373}}"""
+        assertEquals(12242L to 131L, SseParser.extractUsage(chunk))
+        assertEquals(null, SseParser.extractUsage("""{"choices":[{"delta":{"content":"hi"}}]}"""))
+    }
+
+    @Test
     fun `unescapes quotes newlines and unicode`() {
         val chunk = "{\"choices\":[{\"delta\":{\"content\":\"a\\\"b\\nc\\u0041\"}}]}"
         assertEquals("a\"b\ncA", SseParser.extractDelta(chunk))

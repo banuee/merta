@@ -7,10 +7,14 @@
                     "patch": {"code": 0, "output": "..."}}   (agy-autopatch check)
   POST /patch   -> {"ok": true, "code": 0, "output": "..."} (agy-autopatch patch)
   GET  /models  -> {"ok": true, "code": 0, "output": "<сырой вывод agy models>"}
+  GET  /quota   -> {"ok": true, "code": 0, "output": "<agy -p /usage>"}
+                   (лимиты: groups[]/buckets[] c remaining_fraction/reset_time)
   POST /run     {prompt, conversation_id?, model?, effort?,
                  yolo?, dirs?[], timeout_s?}
                 -> application/x-ndjson: строки stdout
                    `agy -p --output-format stream-json ...` как есть.
+  POST /shell   {command, timeout_s?}
+                -> {"ok", "code", "output"} (Shizuku-shell через rish).
 
 Один прогон за раз (409 BUSY при занятом). Запуск:
   nohup python3 daemon.py >>daemon.log 2>&1 &
@@ -333,6 +337,20 @@ class Handler(BaseHTTPRequestHandler):
                 env = dict(os.environ, HOME=AGY_HOME)
                 p = subprocess.run([AGY, "models"], capture_output=True,
                                    text=True, timeout=120,
+                                   stdin=subprocess.DEVNULL, env=env)
+                self._json({"ok": True, "code": p.returncode,
+                            "output": (p.stdout + p.stderr)[-20000:]})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+        elif self.path == "/quota":
+            # Лимиты: agy -p /usage --output-format json (вне run_lock).
+            if not AGY:
+                self._json({"ok": False, "error": "agy not found"}, 500)
+                return
+            try:
+                env = dict(os.environ, HOME=AGY_HOME)
+                p = subprocess.run([AGY, "-p", "/usage", "--output-format", "json", "--"],
+                                   capture_output=True, text=True, timeout=120,
                                    stdin=subprocess.DEVNULL, env=env)
                 self._json({"ok": True, "code": p.returncode,
                             "output": (p.stdout + p.stderr)[-20000:]})

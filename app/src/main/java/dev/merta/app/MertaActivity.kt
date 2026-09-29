@@ -35,7 +35,6 @@ import dev.merta.app.ui.chat.ChatScreen
 import dev.merta.app.ui.chat.ChatViewModel
 import dev.merta.app.ui.models.ModelsScreen
 import dev.merta.app.ui.providers.ProvidersScreen
-import dev.merta.app.ui.sessions.SessionsScreen
 import dev.merta.app.ui.settings.SettingsScreen
 import dev.merta.app.ui.theme.MetroTheme
 
@@ -118,10 +117,6 @@ class MertaActivity : ComponentActivity() {
                         Route.CHAT -> ChatScreen(
                             vm,
                             onOpenSettings = { route = Route.SETTINGS },
-                            onOpenSessions = {
-                                vm.refreshSessions()
-                                route = Route.SESSIONS
-                            },
                             onNewChat = {
                                 vm.newChat()
                             },
@@ -175,14 +170,6 @@ class MertaActivity : ComponentActivity() {
                             onBack = { route = Route.SETTINGS },
                             )
                         }
-                        Route.SESSIONS -> SessionsScreen(
-                            vm,
-                            onOpenChat = { route = Route.CHAT },
-                            onNewChat = {
-                                vm.newChat()
-                                route = Route.CHAT
-                            },
-                        )
                         }
                     }
                     } // systemBarsPadding
@@ -191,5 +178,5 @@ class MertaActivity : ComponentActivity() {
         }
     }
 
-    private enum class Route { CHAT, SETTINGS, MODELS, SESSIONS, PROVIDERS }
+    private enum class Route { CHAT, SETTINGS, MODELS, PROVIDERS }
 }

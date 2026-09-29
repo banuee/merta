@@ -111,6 +111,35 @@ object SseParser {
     }
 
     /**
+     * Usage чанка (`"usage":{"prompt_tokens":N,"completion_tokens":M,...}`,
+     * OpenRouter при `stream_options: {"include_usage": true}`).
+     * @return (prompt, completion) или null, если usage нет.
+     */
+    fun extractUsage(chunkJson: String): Pair<Long, Long>? {
+        val uIdx = chunkJson.indexOf("\"usage\"")
+        if (uIdx < 0) return null
+        val p = extractLongAfterKey(chunkJson, "prompt_tokens", uIdx) ?: return null
+        val c = extractLongAfterKey(chunkJson, "completion_tokens", uIdx) ?: 0L
+        return p to c
+    }
+
+    /** Целое число после `"key":` начиная с [from]. null — нет/не число. */
+    fun extractLongAfterKey(json: String, key: String, from: Int): Long? {
+        var i = json.indexOf("\"$key\"", from)
+        if (i < 0) return null
+        i += key.length + 2
+        while (i < json.length && json[i].isWhitespace()) i++
+        if (i >= json.length || json[i] != ':') return null
+        i++
+        while (i < json.length && json[i].isWhitespace()) i++
+        var j = i
+        if (j < json.length && json[j] == '-') j++
+        while (j < json.length && json[j].isDigit()) j++
+        if (j == i) return null
+        return json.substring(i, j).toLongOrNull()
+    }
+
+    /**
      * Ищет `"key"` начиная с [from], затем корректно парсит JSON-строку значения
      * (с учётом `\"`, `\\`, `\n`, `\uXXXX`). Возвращает null, если ключа нет,
      * значение — не строка (null/объект) или строка обрезана.

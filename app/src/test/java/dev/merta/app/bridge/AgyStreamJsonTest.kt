@@ -74,6 +74,15 @@ class AgyStreamJsonTest {
     }
 
     @Test
+    fun `parses usage in result`() {
+        val line = """{"event":"result","result":{"status":"SUCCESS","response":"hi","usage":{"input_tokens":12242,"output_tokens":131,"thinking_tokens":73,"cache_read_tokens":0,"total_tokens":12373}}}"""
+        assertEquals(
+            listOf(AgyEvent.Done("hi", "", emptyList(), AgyStreamJson.TurnUsage(12242, 131, 73))),
+            AgyStreamJson.parseLine(line),
+        )
+    }
+
+    @Test
     fun `parses agent_response text_delta only`() {
         val line = """{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"hello"}}"""
         assertEquals(listOf(AgyEvent.Delta("hello")), AgyStreamJson.parseLine(line))

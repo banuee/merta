@@ -184,6 +184,25 @@ class MertaSettings(context: Context) {
         return if (name.isNullOrBlank()) modelId else name
     }
 
+    /**
+     * Кэш тарифов (providerId -> modelId -> "prompt|completion", $ за 1M).
+     * Отдельным ключом — старый кэш имён не трогаем.
+     */
+    fun modelsPricingCache(): Map<String, Map<String, String>> =
+        ProviderJson.modelsCacheFromJson(prefs.getString(KEY_PRICING, "{}") ?: "{}")
+
+    fun saveModelsPricingCache(cache: Map<String, Map<String, String>>) {
+        prefs.edit().putString(KEY_PRICING, ProviderJson.modelsCacheToJson(cache)).apply()
+    }
+
+    /** Тарифы модели ($ за 1M). Нет записи — (0, 0) = цена неизвестна. */
+    fun pricingFor(providerId: String, modelId: String): Pair<Double, Double> {
+        val raw = modelsPricingCache()[providerId]?.get(modelId) ?: return 0.0 to 0.0
+        val parts = raw.split('|')
+        return (parts.getOrNull(0)?.toDoubleOrNull() ?: 0.0) to
+            (parts.getOrNull(1)?.toDoubleOrNull() ?: 0.0)
+    }
+
     /** Авто-разрешение write_file/run_command без диалога (по умолчанию выкл). */
     fun loadAutoApprove(): Boolean = prefs.getBoolean(KEY_AUTO_APPROVE, false)
 
@@ -201,6 +220,7 @@ class MertaSettings(context: Context) {
         private const val KEY_PROVIDERS = "llm_providers"
         private const val KEY_ACTIVE_PROVIDER = "llm_active_provider"
         private const val KEY_MODELS = "llm_models_cache"
+        private const val KEY_PRICING = "llm_pricing_cache"
         private const val KEY_SELECTED = "llm_selected_models"
         private const val KEY_AUTO_APPROVE = "agent_auto_approve"
 

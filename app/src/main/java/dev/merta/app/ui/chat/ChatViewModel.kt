@@ -116,6 +116,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     data class DaemonInfo(val alive: Boolean = false, val note: String = "")
     val daemonState = MutableStateFlow(DaemonInfo())
 
+    /** Токены текущей сессии (ходы обеих веток). Сброс при смене/создании чата. */
+    val usageState = MutableStateFlow(dev.merta.app.data.chat.SessionUsage())
+
+    /** Лимиты agy (`/usage`), с временем замера. null — не запрашивали/нет. */
+    data class QuotaData(val groups: List<dev.merta.app.bridge.QuotaGroup>, val fetchedAt: Long)
+    val quotaState = MutableStateFlow<QuotaData?>(null)
+    private var quotaFetching = false
+
     /** Статус Shizuku для настроек (обновляется по запросу). */
     val shizukuStatus = MutableStateFlow(dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING)
 
@@ -305,6 +313,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         cancelStream(keepPartial = false)
         currentTitle = "Новый чат"
         nextId = 1L
+        usageState.value = dev.merta.app.data.chat.SessionUsage()
+        quotaState.value = null
         _state.update { it.copy(sessionId = sessions.newId(), messages = emptyList(), streaming = null, sending = false) }
         refreshConfig()
         refreshSessions()
@@ -317,6 +327,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val loaded = sessions.load(id)
         currentTitle = meta.title
         nextId = (loaded.maxOfOrNull { it.id } ?: 0) + 1
+        usageState.value = dev.merta.app.data.chat.SessionUsage()
+        quotaState.value = null
         _state.update { it.copy(sessionId = id, messages = loaded, streaming = null) }
     }
 
@@ -367,10 +379,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }.filter { it.models.isNotEmpty() }
                 // Кэш имён для подписей пузыря без сети.
                 val cache = settings.modelsNamesCache().toMutableMap()
+                val pricing = settings.modelsPricingCache().toMutableMap()
                 for (g in groups) {
                     cache[g.provider.id] = g.models.associate { it.id to it.displayName }
+                    pricing[g.provider.id] = g.models.associate {
+                        it.id to "${it.promptPer1M}|${it.completionPer1M}"
+                    }
                 }
                 settings.saveModelsNamesCache(cache)
+                settings.saveModelsPricingCache(pricing)
                 _state.update {
                     it.copy(
                         groups = groups,
@@ -389,6 +406,41 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         settings.setActiveProvider(providerId)
         settings.setSelectedModel(providerId, modelId)
         refreshConfig()
+    }
+
+    fun activeProviderId(): String = settings.activeProviderId()
+
+    fun selectedModelName(providerId: String): String = settings.selectedModel(providerId)
+
+    fun isAgyActive(): Boolean = settings.activeProvider()?.isAgy == true
+
+    /** Тарифы текущей модели ($ за 1M). Нет — (0, 0). */
+    fun pricingForCurrent(): Pair<Double, Double> {
+        val p = settings.activeProvider() ?: return 0.0 to 0.0
+        return settings.pricingFor(p.id, settings.selectedModel(p.id))
+    }
+
+    /**
+     * Лимиты agy для панели сессии. Кэш 5 минут (как официальные тулзы),
+     * force — мимо кэша. Параллельные запросы схлопываются.
+     */
+    fun refreshQuota(force: Boolean = false) {
+        val agy = settings.loadProviders().find { it.isAgy } ?: return
+        val cached = quotaState.value
+        if (!force && cached != null && System.currentTimeMillis() - cached.fetchedAt < 5 * 60 * 1000) return
+        if (quotaFetching) return
+        quotaFetching = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val groups = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl).quota()
+                if (groups.isNotEmpty()) {
+                    quotaState.value = QuotaData(groups, System.currentTimeMillis())
+                }
+            } catch (_: Exception) {
+            } finally {
+                quotaFetching = false
+            }
+        }
     }
 
     // ---------- отправка ----------
@@ -502,6 +554,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             override suspend fun onApproval(approval: PendingApproval): Boolean {
                                 currentThoughtId?.let { addThinkStep(it, "ожидание: " + approval.summary) }
                                 return waitApproval(approval)
+                            }
+
+                            override fun onUsage(inputTokens: Long, outputTokens: Long) {
+                                usageState.update { it.add(inputTokens, outputTokens) }
                             }
                         },
                     )
@@ -626,6 +682,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                 if (ev.conversationId.isNotBlank()) {
                                     agyConversations[sessionId] = ev.conversationId
                                 }
+                                usageState.update { it.add(ev.usage.input, ev.usage.output, ev.usage.thinking) }
                                 // Стрим уже показал текст — дубли не пушим, только новое.
                                 val streamed = _state.value.streaming.orEmpty()
                                 val r = ev.response.trim()
