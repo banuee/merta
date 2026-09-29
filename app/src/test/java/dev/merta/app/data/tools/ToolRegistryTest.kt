@@ -264,4 +264,20 @@ class ToolRegistryTest {
         val out = registry.execute(ToolCall("1", ToolDefs.TAP_SCREEN, mapOf("x" to "1", "y" to "2"))) { true }
         assertTrue(out.contains("демона"))
     }
+
+    @Test
+    fun `summary never prints null`() {
+        val calls = listOf(
+            ToolCall("1", ToolDefs.LIST_PACKAGES, emptyMap()),
+            ToolCall("2", ToolDefs.LIST_DIR, emptyMap()),
+            ToolCall("3", ToolDefs.GREP_SEARCH, mapOf("pattern" to "x")),
+            ToolCall("4", ToolDefs.READ_FILE, emptyMap()),
+            ToolCall("5", ToolDefs.TAP_SCREEN, emptyMap()),
+        )
+        for (c in calls) {
+            val s = ToolRegistry.summary(c)
+            assertFalse("null в подписи ${c.name}: $s", s.contains("null"))
+        }
+        assertTrue(ToolRegistry.summary(calls[0]).contains("все"))
+    }
 }

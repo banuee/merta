@@ -272,15 +272,16 @@ class ToolRegistry(
         const val MAX_OUTPUT = 20 * 1024
 
         fun summary(call: ToolCall): String = when (call.name) {
-            ToolDefs.READ_FILE -> "Читать ${call.arguments["path"]}"
-            ToolDefs.LIST_DIR -> "Список ${call.arguments["path"]}"
-            ToolDefs.GREP_SEARCH -> "Поиск «${call.arguments["pattern"]}» в ${call.arguments["root"]}"
-            ToolDefs.WRITE_FILE -> "Записать ${call.arguments["path"]}"
-            ToolDefs.RUN_COMMAND -> "Выполнить: ${call.arguments["command"]}"
-            ToolDefs.INSTALL_APK -> "Установить APK ${call.arguments["path"]}"
-            ToolDefs.LIST_PACKAGES -> "Пакеты: ${call.arguments["filter"]}"
-            ToolDefs.TAP_SCREEN -> "Тап ${call.arguments["x"]},${call.arguments["y"]}"
-            ToolDefs.SWIPE_SCREEN -> "Свайп ${call.arguments["x1"]},${call.arguments["y1"]} → ${call.arguments["x2"]},${call.arguments["y2"]}"
+            ToolDefs.READ_FILE -> "Читать ${call.arguments["path"].orEmpty()}"
+            ToolDefs.LIST_DIR -> "Список ${(call.arguments["path"] ?: "").ifBlank { "рабочая" }}"
+            ToolDefs.GREP_SEARCH -> "Поиск «${call.arguments["pattern"].orEmpty()}» в " +
+                (call.arguments["root"] ?: "").ifBlank { "рабочая" }
+            ToolDefs.WRITE_FILE -> "Записать ${call.arguments["path"].orEmpty()}"
+            ToolDefs.RUN_COMMAND -> "Выполнить: ${call.arguments["command"].orEmpty()}"
+            ToolDefs.INSTALL_APK -> "Установить APK ${call.arguments["path"].orEmpty()}"
+            ToolDefs.LIST_PACKAGES -> "Пакеты: ${(call.arguments["filter"] ?: "").ifBlank { "все" }}"
+            ToolDefs.TAP_SCREEN -> "Тап ${call.arguments["x"].orEmpty()},${call.arguments["y"].orEmpty()}"
+            ToolDefs.SWIPE_SCREEN -> "Свайп ${call.arguments["x1"].orEmpty()},${call.arguments["y1"].orEmpty()} → ${call.arguments["x2"].orEmpty()},${call.arguments["y2"].orEmpty()}"
             else -> call.name
         }
 
