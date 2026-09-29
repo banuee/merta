@@ -112,4 +112,28 @@ class AgyStreamJsonTest {
         val line = """{"event":"ping","data":{"status":"x","response":"y"}}"""
         assertTrue(AgyStreamJson.parseLine(line).isEmpty())
     }
+
+    @Test
+    fun `parses bare error envelope without event`() {
+        val line = """{"error":"RESOURCE_EXHAUSTED: Quota exceeded"}"""
+        val evs = AgyStreamJson.parseLine(line)
+        assertEquals(1, evs.size)
+        assertEquals(AgyEvent.Error("RESOURCE_EXHAUSTED: Quota exceeded"), evs[0])
+    }
+
+    @Test
+    fun `parses event error envelope`() {
+        val line = """{"event":"error","error":"Rate limit reached"}"""
+        val evs = AgyStreamJson.parseLine(line)
+        assertEquals(1, evs.size)
+        assertEquals(AgyEvent.Error("Rate limit reached"), evs[0])
+    }
+
+    @Test
+    fun `plain text error is recognized as Error event not Delta`() {
+        val line = "Error: Quota exceeded for model gemini-3.8-flash"
+        val evs = AgyStreamJson.parseLine(line)
+        assertEquals(1, evs.size)
+        assertEquals(AgyEvent.Error("Error: Quota exceeded for model gemini-3.8-flash"), evs[0])
+    }
 }

@@ -466,27 +466,54 @@ class Handler(BaseHTTPRequestHandler):
             # HOME с credentials: agy ищет закэшированный логин там, где логинились.
             env = dict(os.environ, HOME=AGY_HOME)
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True,
+                                    stderr=subprocess.PIPE, text=True,
                                     bufsize=1, stdin=subprocess.DEVNULL, env=env,
                                     preexec_fn=os.setsid)
             running_proc = proc
         except FileNotFoundError:
             self._json({"ok": False, "error": "agy not found: %s" % AGY}, 500)
             return
+
+        err_lines = []
+        def read_stderr():
+            try:
+                for el in proc.stderr:
+                    s = el.strip()
+                    if s:
+                        err_lines.append(s)
+            except Exception:
+                pass
+        t_err = threading.Thread(target=read_stderr, daemon=True)
+        t_err.start()
+
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         try:
             assert proc.stdout is not None
+            saw_done_or_error = False
             for line in proc.stdout:
                 if line.strip():
+                    if '"status":' in line or '"result":' in line or '"error":' in line:
+                        saw_done_or_error = True
                     chunk = (line if line.endswith("\n") else line + "\n").encode(
                         "utf-8", "replace")
                     self.wfile.write(chunk)
                     self.wfile.flush()
             rc = proc.wait(timeout=timeout)
+            try:
+                t_err.join(timeout=1.0)
+            except Exception:
+                pass
             log("run done rc=%d" % rc)
+            if rc != 0 and not saw_done_or_error:
+                err_msg = " ".join(err_lines)[-500:] if err_lines else ""
+                if not err_msg:
+                    err_msg = "процесс agy завершился с кодом %d" % rc
+                err_json = json.dumps({"event": "result", "result": {"status": "ERROR", "error": err_msg}}) + "\n"
+                self.wfile.write(err_json.encode("utf-8", "replace"))
+                self.wfile.flush()
         except BrokenPipeError:
             kill_proc_tree(proc)
             log("run: client gone, killed")

@@ -125,18 +125,25 @@ object SseParser {
 
     /** Целое число после `"key":` начиная с [from]. null — нет/не число. */
     fun extractLongAfterKey(json: String, key: String, from: Int): Long? {
-        var i = json.indexOf("\"$key\"", from)
-        if (i < 0) return null
-        i += key.length + 2
-        while (i < json.length && json[i].isWhitespace()) i++
-        if (i >= json.length || json[i] != ':') return null
-        i++
-        while (i < json.length && json[i].isWhitespace()) i++
-        var j = i
-        if (j < json.length && json[j] == '-') j++
-        while (j < json.length && json[j].isDigit()) j++
-        if (j == i) return null
-        return json.substring(i, j).toLongOrNull()
+        var start = from
+        val needle = "\"$key\""
+        while (start < json.length) {
+            val i = json.indexOf(needle, start)
+            if (i < 0) return null
+            var pos = i + needle.length
+            while (pos < json.length && json[pos].isWhitespace()) pos++
+            if (pos < json.length && json[pos] == ':') {
+                pos++
+                while (pos < json.length && json[pos].isWhitespace()) pos++
+                var j = pos
+                if (j < json.length && json[j] == '-') j++
+                while (j < json.length && json[j].isDigit()) j++
+                if (j == pos) return null
+                return json.substring(pos, j).toLongOrNull()
+            }
+            start = i + needle.length
+        }
+        return null
     }
 
     /**
@@ -145,44 +152,52 @@ object SseParser {
      * значение — не строка (null/объект) или строка обрезана.
      */
     fun extractStringAfterKey(json: String, key: String, from: Int): String? {
-        var i = json.indexOf("\"$key\"", from)
-        if (i < 0) return null
-        i += key.length + 2
-        while (i < json.length && json[i].isWhitespace()) i++
-        if (i >= json.length || json[i] != ':') return null
-        i++
-        while (i < json.length && json[i].isWhitespace()) i++
-        if (i >= json.length || json[i] != '"') return null
-        i++
-        val out = StringBuilder()
-        while (i < json.length) {
-            val c = json[i]
-            if (c == '"') return out.toString()
-            if (c == '\\') {
-                i++
-                if (i >= json.length) return null
-                when (json[i]) {
-                    '"' -> out.append('"')
-                    '\\' -> out.append('\\')
-                    '/' -> out.append('/')
-                    'b' -> out.append('\b')
-                    'f' -> out.append('')
-                    'n' -> out.append('\n')
-                    'r' -> out.append('\r')
-                    't' -> out.append('\t')
-                    'u' -> {
-                        if (i + 4 >= json.length) return null
-                        val hex = json.substring(i + 1, i + 5)
-                        val code = hex.toIntOrNull(16) ?: return null
-                        out.append(code.toChar())
-                        i += 4
+        var start = from
+        val needle = "\"$key\""
+        while (start < json.length) {
+            val i = json.indexOf(needle, start)
+            if (i < 0) return null
+            var pos = i + needle.length
+            while (pos < json.length && json[pos].isWhitespace()) pos++
+            if (pos < json.length && json[pos] == ':') {
+                pos++
+                while (pos < json.length && json[pos].isWhitespace()) pos++
+                if (pos >= json.length || json[pos] != '"') return null
+                pos++
+                val out = StringBuilder()
+                var p = pos
+                while (p < json.length) {
+                    val c = json[p]
+                    if (c == '"') return out.toString()
+                    if (c == '\\') {
+                        p++
+                        if (p >= json.length) return null
+                        when (json[p]) {
+                            '"' -> out.append('"')
+                            '\\' -> out.append('\\')
+                            '/' -> out.append('/')
+                            'b' -> out.append('\b')
+                            'f' -> out.append('\u000c')
+                            'n' -> out.append('\n')
+                            'r' -> out.append('\r')
+                            't' -> out.append('\t')
+                            'u' -> {
+                                if (p + 4 >= json.length) return null
+                                val hex = json.substring(p + 1, p + 5)
+                                val code = hex.toIntOrNull(16) ?: return null
+                                out.append(code.toChar())
+                                p += 4
+                            }
+                            else -> out.append(json[p])
+                        }
+                    } else {
+                        out.append(c)
                     }
-                    else -> out.append(json[i])
+                    p++
                 }
-            } else {
-                out.append(c)
+                return null
             }
-            i++
+            start = i + needle.length
         }
         return null
     }

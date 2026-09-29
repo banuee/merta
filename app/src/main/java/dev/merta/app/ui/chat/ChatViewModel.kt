@@ -21,6 +21,7 @@ import dev.merta.app.data.tools.ToolRegistry
 import dev.merta.app.data.workspace.FileGatewayImpl
 import dev.merta.app.data.workspace.WorkspaceScope
 import dev.merta.app.data.workspace.WorkspaceStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -677,18 +678,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         },
                     )
                 }
-                // Запечатать последний ход: стрим — в пузырь, Thought — готов.
                 sealTurn()
-                _state.update { it.copy(streaming = null, sending = false) }
-                activeClient = null
             } catch (e: LlmException) {
-                _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
-                activeClient = null
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
-                currentThoughtId?.let { finishThought(it, System.currentTimeMillis() - currentThoughtStart) }
+            } catch (e: Exception) {
+                if (e !is CancellationException) {
+                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Ошибка: ${e.message}"))
+                }
+            } finally {
+                sealTurn()
+                val now = System.currentTimeMillis()
+                _state.update { st ->
+                    st.copy(
+                        streaming = null,
+                        sending = false,
+                        pendingApproval = null,
+                        messages = st.messages.map { m ->
+                            val t = m.thought
+                            if (t != null && t.active) {
+                                m.copy(thought = t.copy(active = false, lastMs = now - t.startedMs))
+                            } else {
+                                m
+                            }
+                        },
+                    )
+                }
                 currentThoughtId = null
+                activeClient = null
             }
             persist()
         }
@@ -827,17 +845,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         }
                     }
+                    sealTurn()
                 }
-                _state.update { it.copy(streaming = null, sending = false) }
-                activeAgy = null
             } catch (e: LlmException) {
-                _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
-                activeAgy = null
+                sealTurn()
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
-                currentThoughtId?.let { finishThought(it, System.currentTimeMillis() - currentThoughtStart) }
+            } catch (e: Exception) {
+                sealTurn()
+                if (e !is CancellationException) {
+                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "Ошибка: ${e.message}"))
+                }
+            } finally {
+                val now = System.currentTimeMillis()
+                _state.update { st ->
+                    st.copy(
+                        streaming = null,
+                        sending = false,
+                        pendingApproval = null,
+                        messages = st.messages.map { m ->
+                            val t = m.thought
+                            if (t != null && t.active) {
+                                m.copy(thought = t.copy(active = false, lastMs = now - t.startedMs))
+                            } else {
+                                m
+                            }
+                        },
+                    )
+                }
                 currentThoughtId = null
+                activeAgy = null
             }
             persist()
         }
@@ -848,6 +886,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         return when {
             "authentication" in lower -> "agy: нужна авторизация — в Termux: proot-distro login …, затем agy (войти в аккаунт)."
             "busy" in lower -> "agy: предыдущий запрос ещё идёт — дождись и повтори."
+            "quota" in lower || "exhausted" in lower || "rate" in lower || "429" in lower ||
+                "capacity" in lower || "credit" in lower || "limit" in lower || "лимит" in lower || "квота" in lower ->
+                "agy: закончилась квота (лимит запросов модели). Смени модель или подожди сброса лимита."
             "недоступен" in lower -> raw
             else -> "agy: $raw"
         }
@@ -909,12 +950,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun describeError(e: LlmException): String = when (e.status) {
-        401 -> "Ошибка 401: неверный API-ключ. Проверь ключ провайдера."
-        404 -> "Ошибка 404: endpoint или модель не найдены."
-        429 -> "Ошибка 429: квота/лимит провайдера. Подожди или смени модель."
-        -1 -> e.message ?: "Ошибка сети."
-        else -> "Ошибка ${e.status}: ${e.message}"
+    private fun describeError(e: LlmException): String {
+        val msg = e.message.orEmpty()
+        val lower = msg.lowercase()
+        val isQuota = e.status == 429 || "quota" in lower || "exhausted" in lower || "rate_limit" in lower ||
+            "rate limit" in lower || "capacity" in lower || "429" in lower || "лимит" in lower || "квота" in lower
+        if (isQuota) {
+            return "Ошибка квоты / лимита (429): исчерпан лимит запросов модели. Подожди сброса лимита или смени модель."
+        }
+        return when (e.status) {
+            401 -> "Ошибка 401: неверный API-ключ. Проверь ключ провайдера."
+            404 -> "Ошибка 404: endpoint или модель не найдены."
+            429 -> "Ошибка 429: квота/лимит провайдера. Подожди или смени модель."
+            -1 -> if (msg.isNotBlank()) msg else "Ошибка сети."
+            else -> "Ошибка ${e.status}: $msg"
+        }
     }
 
 

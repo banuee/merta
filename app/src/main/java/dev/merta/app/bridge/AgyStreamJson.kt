@@ -36,11 +36,21 @@ object AgyStreamJson {
     fun parseLine(line: String): List<AgyEvent> {
         val t = line.trim()
         if (t.isEmpty()) return emptyList()
-        if (!t.startsWith("{")) return listOf(AgyEvent.Delta(t))
-        return when (SseParser.extractStringAfterKey(t, "event", 0)) {
+        if (!t.startsWith("{")) {
+            val lower = t.lowercase()
+            if (lower.startsWith("error:") || lower.startsWith("fatal:") || lower.startsWith("exception:") ||
+                "resource_exhausted" in lower || "quota exceeded" in lower || "rate limit" in lower || "429" in lower
+            ) {
+                return listOf(AgyEvent.Error(t))
+            }
+            return listOf(AgyEvent.Delta(t))
+        }
+        val event = SseParser.extractStringAfterKey(t, "event", 0)
+        return when (event) {
             "init" -> listOf(AgyEvent.Init(convId(t)))
             "result" -> listOf(parseResult(t, t.indexOf("\"result\"")))
             "step_update" -> parseStep(t, t.indexOf("\"step_update\""))
+            "error" -> listOf(parseResult(t, 0))
             else -> parseBare(t)
         }
     }
@@ -49,7 +59,7 @@ object AgyStreamJson {
     private fun parseBare(t: String): List<AgyEvent> {
         // Только top-level ключи: обычный текст модели со словами status/response
         // внутри НЕ должен становиться ложным Done.
-        if (hasTopLevelKey(t, "status") || hasTopLevelKey(t, "response")) {
+        if (hasTopLevelKey(t, "status") || hasTopLevelKey(t, "response") || hasTopLevelKey(t, "error")) {
             return listOf(parseResult(t, 0))
         }
         return emptyList()
@@ -88,13 +98,14 @@ object AgyStreamJson {
         val status = SseParser.extractStringAfterKey(t, "status", from)?.uppercase() ?: ""
         val response = SseParser.extractStringAfterKey(t, "response", from) ?: ""
         val conv = convId(t)
-        return if (status == "SUCCESS" || (status.isEmpty() && response.isNotEmpty())) {
+        val err = SseParser.extractStringAfterKey(t, "error", from)
+            ?: SseParser.extractStringAfterKey(t, "message", from)
+        return if (err != null || (status.isNotEmpty() && status != "SUCCESS")) {
+            AgyEvent.Error(err ?: status.ifBlank { "неизвестная ошибка agy" })
+        } else if (status == "SUCCESS" || response.isNotEmpty()) {
             AgyEvent.Done(response, conv, parseDenied(t, from), parseUsage(t, from))
         } else {
-            val err = SseParser.extractStringAfterKey(t, "error", from)
-                ?: SseParser.extractStringAfterKey(t, "message", from)
-                ?: status.ifBlank { "неизвестная ошибка agy" }
-            AgyEvent.Error(err)
+            AgyEvent.Error(status.ifBlank { "неизвестная ошибка agy" })
         }
     }
 
@@ -191,7 +202,7 @@ object AgyStreamJson {
                 t[i] == '"' -> {
                     val r = readJsonString(t, i)
                     i = r?.second ?: break
-                    r?.first
+                    r.first
                 }
                 t[i] == '{' || t[i] == '[' -> {
                     i = skipBalanced(t, i) ?: break
