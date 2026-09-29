@@ -407,8 +407,7 @@ fun ChatScreen(
                         .fillMaxHeight()
                         .fillMaxWidth(0.85f)
                         .metroTapConsume()
-                        .pointerInput(drawer) {
-                            // Тот же детектор, что на контенте: свайп изнутри
+                        .pointerInput(drawer) {                            // Тот же детектор, что на контенте: свайп изнутри
                             // панели до контента не долетает, закрываем сами.
                             detectHorizontalDragGestures(
                                 onDragEnd = { dragTotal = 0f },
@@ -426,7 +425,7 @@ fun ChatScreen(
                             )
                         },
                 ) {
-                    if (open == Drawer.RIGHT) {
+                    if (lastSide == Drawer.RIGHT) {  // lastSide: на выходе open уже null
                         SessionDrawer(
                             vm = vm,
                             onOpenSettings = { drawer = null; onOpenSettings() },
