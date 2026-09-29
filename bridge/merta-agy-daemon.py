@@ -22,6 +22,7 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -221,6 +222,19 @@ DEFAULT_MODEL = "gemini-3.8-flash"
 SAFE_MODEL = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 run_lock = threading.Lock()
+running_proc = None
+
+
+def kill_proc_tree(proc):
+    if not proc:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 def log(msg):
@@ -415,6 +429,16 @@ class Handler(BaseHTTPRequestHandler):
             log("shell: %.120s" % cmd)
             rc, out = run_rish(cmd, body.get("timeout_s") or 60)
             self._json({"ok": rc == 0, "code": rc, "output": out[-20000:]})
+        elif self.path == "/stop":
+            if not self._need_token():
+                return
+            killed = False
+            global running_proc
+            if running_proc:
+                kill_proc_tree(running_proc)
+                killed = True
+                log("stop: running proc killed by request")
+            self._json({"ok": True, "killed": killed})
         else:
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 
@@ -437,12 +461,15 @@ class Handler(BaseHTTPRequestHandler):
             body.get("model") or "-", (body.get("conversation_id") or "-")[:8],
             body.get("effort") or "-", bool(body.get("yolo")),
             len(body.get("dirs") or []), AGY_HOME, body.get("prompt", "")))
+        global running_proc
         try:
             # HOME с credentials: agy ищет закэшированный логин там, где логинились.
             env = dict(os.environ, HOME=AGY_HOME)
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, text=True,
-                                    bufsize=1, stdin=subprocess.DEVNULL, env=env)
+                                    bufsize=1, stdin=subprocess.DEVNULL, env=env,
+                                    preexec_fn=os.setsid)
+            running_proc = proc
         except FileNotFoundError:
             self._json({"ok": False, "error": "agy not found: %s" % AGY}, 500)
             return
@@ -461,19 +488,16 @@ class Handler(BaseHTTPRequestHandler):
             rc = proc.wait(timeout=timeout)
             log("run done rc=%d" % rc)
         except BrokenPipeError:
-            try:
-                proc.kill()
-            except OSError:
-                pass
+            kill_proc_tree(proc)
             log("run: client gone, killed")
         except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except OSError:
-                pass
+            kill_proc_tree(proc)
             log("run: timeout %ds, killed" % timeout)
         except Exception as e:
             log("run error: %s" % e)
+        finally:
+            if running_proc is proc:
+                running_proc = None
 
     def log_message(self, *args):
         pass

@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
@@ -79,6 +80,7 @@ fun ChatScreen(
     val scheme = LocalMetroScheme.current
     val ui by vm.state.collectAsState()
     var input by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
     var showEffort by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Long?>(null) }
     var editing by remember { mutableStateOf<ChatMessage?>(null) }
@@ -295,7 +297,20 @@ fun ChatScreen(
             )
         }
 
+        val isWorking = ui.sending || ui.streaming != null
+        val totalItems = ui.messages.size + if (!ui.streaming.isNullOrBlank()) 1 else 0
+        val lastMsg = ui.messages.lastOrNull()
+        val lastThoughtSteps = lastMsg?.thought?.steps?.size ?: 0
+        val lastThoughtTextLen = lastMsg?.thought?.reasoning?.length ?: 0
+
+        LaunchedEffect(ui.sessionId, ui.messages.size, ui.streaming, lastThoughtSteps, lastThoughtTextLen, isWorking) {
+            if (totalItems > 0) {
+                listState.scrollToItem(totalItems - 1)
+            }
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -323,10 +338,10 @@ fun ChatScreen(
                     )
                 }
             }
-            if (ui.streaming != null) {
+            if (!ui.streaming.isNullOrBlank()) {
                 item(key = "streaming") {
                     MessageBubble(
-                        msg = ChatMessage(-1, ChatMessage.Role.ASSISTANT, ui.streaming + "▍"),
+                        msg = ChatMessage(-1, ChatMessage.Role.ASSISTANT, ui.streaming.orEmpty()),
                         showMenu = false,
                         onLongPress = {},
                         onDismissMenu = {},
@@ -373,13 +388,25 @@ fun ChatScreen(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .clip(RoundedCornerShape(MetroDimens.radiusSmall))
-                    .background(scheme.accent.copy(alpha = 0.85f))
+                    .background(
+                        if (isWorking) scheme.red.copy(alpha = 0.85f)
+                        else scheme.accent.copy(alpha = 0.85f),
+                    )
                     .metroClickable(targetScale = 0.88f) {
-                        if (vm.send(input)) input = ""
+                        if (isWorking) {
+                            vm.cancelStream()
+                        } else {
+                            if (vm.send(input)) input = ""
+                        }
                     }
                     .padding(horizontal = 18.dp, vertical = 12.dp),
             ) {
-                Text("→", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(
+                    text = if (isWorking) "■" else "→",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                )
             }
         }
     }

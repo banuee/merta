@@ -11,3 +11,5 @@ graphify-out/
 github_token
 .gemini/
 scratch/
+__pycache__/
+*.pyc

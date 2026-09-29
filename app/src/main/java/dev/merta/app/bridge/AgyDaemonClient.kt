@@ -24,9 +24,22 @@ class AgyDaemonClient(
     @Volatile
     private var currentCall: okhttp3.Call? = null
 
-    /** Рвёт текущий HTTP-запрос (стрим /run). */
+    /** Рвёт текущий HTTP-запрос (стрим /run) и принудительно гасит процесс agy на демоне. */
     fun cancel() {
         currentCall?.cancel()
+        currentCall = null
+        try {
+            val req = withToken(Request.Builder())
+                .url(base() + "/stop")
+                .post(ByteArray(0).toRequestBody(JSON))
+                .build()
+            http.newCall(req).enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: IOException) {}
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    response.close()
+                }
+            })
+        } catch (_: Exception) {}
     }
 
     data class DaemonStatus(
