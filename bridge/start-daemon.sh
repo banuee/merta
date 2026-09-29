@@ -13,8 +13,8 @@ if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
   echo "already running (pid $(cat "$PIDF"))"
   exit 0
 fi
-# Чистим зомби внутри proot (брекеты — чтобы pkill не убил сам себя).
-proot-distro login debian -- pkill -9 -f '[m]erta-agy' 2>/dev/null
+# Чистим только демона (паттерн daemon.py — лаунчер под него не попадает).
+proot-distro login debian -- pkill -9 -f '[d]aemon\.py' 2>/dev/null
 sleep 1
 rm -f "$PIDF"
 setsid nohup proot-distro login debian -- python3 /root/merta-agy/daemon.py \

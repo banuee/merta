@@ -94,6 +94,56 @@ def resolve_patcher(cfg):
     return ""
 
 
+def resolve_rish(cfg):
+    """rish из Termux-home (Shizuku-shell). +x может не быть — тогда через sh."""
+    if cfg.get("rish_bin") and os.path.isfile(cfg["rish_bin"]):
+        return cfg["rish_bin"]
+    thome = cfg.get("termux_home") or THOME
+    for p in (os.path.join(thome, "rish"),
+              os.path.join(thome, "bin", "rish"),
+              os.path.join(HOME, "rish")):
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def run_rish(cmd_text, timeout=60):
+    """Команда в Shizuku-shell через rish. Возвращает (rc, output)."""
+    if not RISH:
+        return 99, "rish not found (run install-phone.sh, needs Shizuku setup)"
+    if not cmd_text or not cmd_text.strip():
+        return 99, "empty command"
+    try:
+        timeout = max(5, min(int(timeout), 300))
+    except (ValueError, TypeError):
+        timeout = 60
+    argv = [RISH, "-c", cmd_text]
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL)
+    except PermissionError:
+        # Нет +x на скрипте — выполняем через sh.
+        try:
+            p = subprocess.run(["sh", RISH, "-c", cmd_text],
+                               capture_output=True, text=True,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+        except Exception as e:
+            return 98, "rish error: %s" % e
+    except Exception as e:
+        return 98, "rish error: %s" % e
+    return p.returncode, (p.stdout + p.stderr)[-20000:]
+
+
+def rish_probe():
+    if not RISH:
+        return False
+    try:
+        rc, _ = run_rish("id", timeout=15)
+        return rc == 0
+    except Exception:
+        return False
+
+
 def find_creds_home(cfg):
     """HOME с закэшированными credentials (там agy залогинен)."""
     if cfg.get("agy_home") and os.path.isdir(cfg["agy_home"]):
@@ -110,6 +160,7 @@ def find_creds_home(cfg):
 CFG = load_config()
 AGY = resolve_agy(CFG)
 PATCHER = resolve_patcher(CFG)
+RISH = resolve_rish(CFG)
 AGY_HOME = find_creds_home(CFG)
 
 DEFAULT_MODEL = "gemini-3.8-flash"
@@ -224,6 +275,7 @@ class Handler(BaseHTTPRequestHandler):
             code, out = run_patch_cmd(["check", "--quiet"], timeout=120)
             self._json({"ok": True, "agy_version": agy_version(),
                         "agy_bin": AGY, "creds_home": AGY_HOME,
+                        "rish_bin": RISH, "rish_ok": rish_probe(),
                         "patch": {"code": code, "output": out[-1500:]}})
         elif self.path == "/models":
             if not AGY:
@@ -258,6 +310,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._stream_run(body)
             finally:
                 run_lock.release()
+        elif self.path == "/shell":
+            # Shizuku-shell через rish: install_apk/pm/input/... для агента.
+            body = self._read_json()
+            cmd = (body.get("command") or "").strip()
+            if not cmd:
+                self._json({"ok": False, "error": "empty command"}, 400)
+                return
+            log("shell: %.120s" % cmd)
+            rc, out = run_rish(cmd, body.get("timeout_s") or 60)
+            self._json({"ok": rc == 0, "code": rc, "output": out[-20000:]})
         else:
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 
