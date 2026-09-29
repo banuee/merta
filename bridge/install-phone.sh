@@ -78,15 +78,25 @@ else
   fi
 fi
 say "rish: ${RISH:-НЕ НАЙДЕН} (работает: $RISH_OK)"
+# Секрет для /run /shell /patch (защита от чужих приложений).
+# Переиспользуем старый из конфига, чтобы токен в приложении не слетал.
+CFG="$ROOTFS/root/merta-agy/config.json"
+SECRET="$(grep -o '"secret": "[^"]*"' "$CFG" 2>/dev/null | head -1 | cut -d'"' -f4)"
+if [ -z "$SECRET" ]; then
+  SECRET="$(cat /dev/urandom 2>/dev/null | tr -dc 'a-f0-9' | head -c 32)"
+fi
+say "токен демона: $SECRET"
+say "(вставь его в ключ agy-провайдера в приложении — один раз)"
 # config.json для демона (пустые значения — автопоиск).
 {
   printf '{'
   printf '"agy_bin": "%s", ' "$AGY_BIN"
   printf '"patcher_bin": "%s", ' "$PPATCHER"
   printf '"rish_bin": "%s", ' "$RISH"
+  printf '"secret": "%s", ' "$SECRET"
   printf '"termux_home": "%s"' "$HOME"
   printf '}\n'
-} > "$ROOTFS/root/merta-agy/config.json"
+} > "$CFG"
 
 # Точка входа ~/bin/merta-agy (старт + status).
 cat > "$HOME/bin/merta-agy" <<EOF

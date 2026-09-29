@@ -74,8 +74,7 @@ class AgyStreamJsonTest {
     }
 
     @Test
-    fun `parses usage in result`() {
-        val line = """{"event":"result","result":{"status":"SUCCESS","response":"hi","usage":{"input_tokens":12242,"output_tokens":131,"thinking_tokens":73,"cache_read_tokens":0,"total_tokens":12373}}}"""
+    fun `parses usage in result`() {        val line = """{"event":"result","result":{"status":"SUCCESS","response":"hi","usage":{"input_tokens":12242,"output_tokens":131,"thinking_tokens":73,"cache_read_tokens":0,"total_tokens":12373}}}"""
         assertEquals(
             listOf(AgyEvent.Done("hi", "", emptyList(), AgyStreamJson.TurnUsage(12242, 131, 73))),
             AgyStreamJson.parseLine(line),
@@ -106,5 +105,11 @@ class AgyStreamJsonTest {
     fun `parses bare result envelope without event`() {
         val line = """{"conversation_id":"c1","status":"SUCCESS","response":"ok"}"""
         assertEquals(listOf(AgyEvent.Done("ok", "c1")), AgyStreamJson.parseLine(line))
+    }
+
+    @Test
+    fun `nested status words are not a result`() {
+        val line = """{"event":"ping","data":{"status":"x","response":"y"}}"""
+        assertTrue(AgyStreamJson.parseLine(line).isEmpty())
     }
 }

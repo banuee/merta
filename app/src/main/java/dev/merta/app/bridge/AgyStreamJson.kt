@@ -47,10 +47,41 @@ object AgyStreamJson {
 
     /** Голый конверт без event (json-формат) или мусор. */
     private fun parseBare(t: String): List<AgyEvent> {
-        if (t.contains("\"status\"") || t.contains("\"response\"")) {
+        // Только top-level ключи: обычный текст модели со словами status/response
+        // внутри НЕ должен становиться ложным Done.
+        if (hasTopLevelKey(t, "status") || hasTopLevelKey(t, "response")) {
             return listOf(parseResult(t, 0))
         }
         return emptyList()
+    }
+
+    /** Есть ли "key": на верхнем уровне объекта (вне вложенных скобок/строк). */
+    private fun hasTopLevelKey(t: String, key: String): Boolean {
+        var depth = 0
+        var inStr = false
+        var i = 0
+        val needle = "\"$key\""
+        while (i < t.length) {
+            val c = t[i]
+            if (inStr) {
+                if (c == '\\') {
+                    i += 2
+                    continue
+                }
+                if (c == '"') inStr = false
+            } else {
+                when (c) {
+                    '"' -> {
+                        if (depth == 1 && t.startsWith(needle, i)) return true
+                        inStr = true
+                    }
+                    '{' -> depth++
+                    '}' -> depth--
+                }
+            }
+            i++
+        }
+        return false
     }
 
     private fun parseResult(t: String, from: Int): AgyEvent {

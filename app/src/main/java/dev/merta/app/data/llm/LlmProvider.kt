@@ -20,6 +20,8 @@ data class LlmModel(
     val name: String,
     val promptPer1M: Double = 0.0,
     val completionPer1M: Double = 0.0,
+    /** Поддержка reasoning/effort (из supported_parameters; нет данных — true). */
+    val reasoningSupported: Boolean = true,
 ) {
     val displayName: String get() = name.ifBlank { id }
 }

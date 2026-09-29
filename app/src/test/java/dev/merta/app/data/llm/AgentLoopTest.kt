@@ -158,6 +158,23 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `split json across data lines still parses`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"he\n" +
+                    "data: llo\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ),
+        )
+        val client = OpenAiCompatClient(server.url("/v1").toString(), "k")
+        val text = client.runAgent(
+            "m", mutableListOf(TurnMessage("user", "hi")), null,
+            ToolRegistry(allowAll, tmp.parent!!), cb = quietCb(),
+        )
+        assertEquals("hello", text)
+    }
+
+    @Test
     fun `retries without effort on 400`() = runBlocking {
         server.enqueue(
             MockResponse().setResponseCode(400)

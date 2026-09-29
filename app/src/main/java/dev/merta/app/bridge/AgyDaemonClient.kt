@@ -13,11 +13,21 @@ import okhttp3.RequestBody.Companion.toRequestBody
 /**
  * HTTP-клиент демона merta-agy (127.0.0.1:18080 в proot).
  * Демона нет — LlmException(-1); agy занят — LlmException(409).
+ * Токен — секрет демона из установщика (хранится в ключе agy-провайдера);
+ * /run /shell /patch без верного токена отвечают 403.
  */
 class AgyDaemonClient(
     private val baseUrl: String,
+    private val token: String = "",
     private val http: OkHttpClient = defaultHttp(),
 ) {
+    @Volatile
+    private var currentCall: okhttp3.Call? = null
+
+    /** Рвёт текущий HTTP-запрос (стрим /run). */
+    fun cancel() {
+        currentCall?.cancel()
+    }
 
     data class DaemonStatus(
         val alive: Boolean,
@@ -45,7 +55,7 @@ class AgyDaemonClient(
         try {
             call.execute().use { resp ->
                 val body = resp.body?.string() ?: ""
-                if (!resp.isSuccessful) return DaemonStatus(alive = true)
+                if (!resp.isSuccessful) return DaemonStatus(alive = false)
                 return DaemonStatus(
                     alive = true,
                     agyVersion = SseParser.extractStringAfterKey(body, "agy_version", 0) ?: "",
@@ -101,7 +111,7 @@ class AgyDaemonClient(
     }
 
     suspend fun patch(): Pair<Int, String> {        val call = http.newCall(
-            Request.Builder().url(base() + "/patch").post(ByteArray(0).toRequestBody(JSON)).build(),
+            withToken(Request.Builder()).url(base() + "/patch").post(ByteArray(0).toRequestBody(JSON)).build(),
         )
         try {
             call.execute().use { resp ->
@@ -126,7 +136,7 @@ class AgyDaemonClient(
         val payload = "{\"command\":\"" + SseParser.jsonEscape(command) +
             "\",\"timeout_s\":" + timeoutS.coerceIn(5, 300) + "}"
         val call = http.newCall(
-            Request.Builder().url(base() + "/shell").post(payload.toRequestBody(JSON)).build(),
+            withToken(Request.Builder()).url(base() + "/shell").post(payload.toRequestBody(JSON)).build(),
         )
         try {
             call.execute().use { resp ->
@@ -152,8 +162,9 @@ class AgyDaemonClient(
     suspend fun runStream(req: AgyRun, onEvent: (AgyEvent) -> Unit) {
         val payload = buildRunBody(req)
         val call = http.newCall(
-            Request.Builder().url(base() + "/run").post(payload.toRequestBody(JSON)).build(),
+            withToken(Request.Builder()).url(base() + "/run").post(payload.toRequestBody(JSON)).build(),
         )
+        currentCall = call
         try {
             call.execute().use { resp ->
                 if (!resp.isSuccessful) {
@@ -176,10 +187,15 @@ class AgyDaemonClient(
         } catch (e: IOException) {
             if (call.isCanceled()) throw LlmException(-2, "отменено")
             throw LlmException(-1, "демон merta-agy недоступен: ${e.message}")
+        } finally {
+            if (currentCall === call) currentCall = null
         }
     }
 
     private fun base(): String = baseUrl.trimEnd('/')
+
+    private fun withToken(b: Request.Builder): Request.Builder =
+        if (token.isBlank()) b else b.header("X-Merta-Token", token)
 
     private fun buildRunBody(req: AgyRun): String {
         val sb = StringBuilder("{\"prompt\":\"").append(SseParser.jsonEscape(req.prompt)).append('"')

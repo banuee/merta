@@ -224,33 +224,31 @@ class OpenAiCompatClient(
                         if (frag.argsFrag != null) acc.args.append(frag.argsFrag)
                     }
                 }
-                // По SSE чанк может ехать несколькими data:-строками — склеиваем,
-                // как в postStream, иначе часть провайдеров молча теряет куски.
+                // SSE-событие может ехать несколькими data:-строками (провайдер
+                // режет JSON) — копим до баланса скобок/пустой строки, иначе
+                // куски дельт и tool_calls ломаются на границах чанков.
                 var dataBlock = StringBuilder()
+                fun flushBlock() {
+                    if (dataBlock.isNotEmpty()) {
+                        handlePayload(dataBlock.toString())
+                        dataBlock = StringBuilder()
+                    }
+                }
                 reader.forEachLine { line ->
                     when {
                         line.startsWith("data:") -> {
                             val payload = line.removePrefix("data:").trimStart()
                             if (SseParser.isDone(payload)) {
-                                if (dataBlock.isNotEmpty()) {
-                                    handlePayload(dataBlock.toString())
-                                    dataBlock = StringBuilder()
-                                }
+                                flushBlock()
                                 return@forEachLine
                             }
                             dataBlock.append(payload)
-                            handlePayload(dataBlock.toString())
-                            dataBlock = StringBuilder()
+                            if (isBalancedJson(dataBlock)) flushBlock()
                         }
-                        line.isBlank() -> {
-                            if (dataBlock.isNotEmpty()) {
-                                handlePayload(dataBlock.toString())
-                                dataBlock = StringBuilder()
-                            }
-                        }
+                        line.isBlank() -> flushBlock()
                     }
                 }
-                if (dataBlock.isNotEmpty()) handlePayload(dataBlock.toString())
+                flushBlock()
                 val calls = frags.entries.sortedBy { it.key }.mapNotNull { (idx, acc) ->
                     if (acc.name.isNullOrBlank()) return@mapNotNull null
                     OutToolCall(acc.id ?: "call-$idx", acc.name!!, acc.args.toString())
@@ -270,6 +268,35 @@ class OpenAiCompatClient(
         var name: String? = null,
         val args: StringBuilder = StringBuilder(),
     )
+
+    /** Баланс {} и [] с учётом строк — признак целого JSON-события. */
+    private fun isBalancedJson(s: CharSequence): Boolean {
+        var depth = 0
+        var inStr = false
+        var seen = false
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (inStr) {
+                if (c == '\\') {
+                    i += 2
+                    continue
+                }
+                if (c == '"') inStr = false
+            } else {
+                when (c) {
+                    '"' -> inStr = true
+                    '{', '[' -> {
+                        depth++
+                        seen = true
+                    }
+                    '}', ']' -> depth--
+                }
+            }
+            i++
+        }
+        return seen && depth == 0 && !inStr
+    }
 
     private fun parseArgs(argsJson: String, keys: List<String>): Map<String, String> {
         if (argsJson.isBlank()) return emptyMap()

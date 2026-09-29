@@ -29,11 +29,41 @@ object ModelsJson {
             val id = SseParser.extractStringAfterKey(obj, "id", 0)
             if (!id.isNullOrBlank()) {
                 val name = SseParser.extractStringAfterKey(obj, "name", 0) ?: ""
-                out.add(LlmModel(id, name, promptPer1M(obj), completionPer1M(obj)))
+                out.add(LlmModel(id, name, promptPer1M(obj), completionPer1M(obj), reasoningSupported(obj)))
             }
             i = end
         }
         return out
+    }
+
+    /**
+     * Поддержка reasoning (опрос возможностей модели из каталога):
+     * `supported_parameters` содержит reasoning-ключи. Ключа нет вообще
+     * (старые каталоги) — считаем поддерживается (сработает 400-фолбэк).
+     */
+    private fun reasoningSupported(obj: String): Boolean {
+        val si = obj.indexOf("\"supported_parameters\"")
+        if (si < 0) return true
+        val arr = obj.indexOf('[', si + 22)
+        if (arr < 0) return true
+        var end = arr + 1
+        var inStr = false
+        while (end < obj.length) {
+            val c = obj[end]
+            if (inStr) {
+                if (c == '\\') {
+                    end += 2
+                    continue
+                }
+                if (c == '"') inStr = false
+            } else {
+                if (c == '"') inStr = true
+                if (c == ']') break
+            }
+            end++
+        }
+        val params = obj.substring(arr, end.coerceAtMost(obj.length)).lowercase()
+        return "reasoning" in params || "effort" in params
     }
 
     /** $ за токен (строкой или числом) → $ за 1M токенов. */

@@ -359,13 +359,33 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 
+    def _token_ok(self):
+        """Секрет config.json (ставит установщик). Нет секрета — открыто."""
+        want = CFG.get("secret") or ""
+        if not want:
+            return True
+        got = self.headers.get("X-Merta-Token") or ""
+        return got == want
+
+    def _need_token(self):
+        if self._token_ok():
+            return True
+        self._json({"ok": False,
+                    "error": "bad token: вставь секрет демона (показывает установщик) " +
+                             "в ключ agy-провайдера в приложении"}, 403)
+        return False
+
     def do_POST(self):
         if self.path == "/patch":
+            if not self._need_token():
+                return
             ensure_patcher()
             code, out = run_patch_cmd(["patch"], timeout=300)
             log("patch -> %d" % code)
             self._json({"ok": code == 0, "code": code, "output": out[-4000:]})
         elif self.path == "/run":
+            if not self._need_token():
+                return
             body = self._read_json()
             if not (body.get("prompt") or "").strip():
                 self._json({"ok": False, "error": "empty prompt"}, 400)
@@ -379,6 +399,8 @@ class Handler(BaseHTTPRequestHandler):
                 run_lock.release()
         elif self.path == "/shell":
             # Shizuku-shell через rish: install_apk/pm/input/... для агента.
+            if not self._need_token():
+                return
             body = self._read_json()
             cmd = (body.get("command") or "").strip()
             if not cmd:
@@ -402,6 +424,9 @@ class Handler(BaseHTTPRequestHandler):
             timeout = max(0, int(timeout))
         except (ValueError, TypeError):
             timeout = 0
+        if not timeout:
+            # Бесконечный wait = зомби-процесс + вечный 409 busy для всех.
+            timeout = 1800
         log("run: model=%s conv=%s effort=%s yolo=%s dirs=%d home=%s prompt=%.60s" % (
             body.get("model") or "-", (body.get("conversation_id") or "-")[:8],
             body.get("effort") or "-", bool(body.get("yolo")),
@@ -427,7 +452,7 @@ class Handler(BaseHTTPRequestHandler):
                         "utf-8", "replace")
                     self.wfile.write(chunk)
                     self.wfile.flush()
-            rc = proc.wait(timeout=timeout or None)
+            rc = proc.wait(timeout=timeout)
             log("run done rc=%d" % rc)
         except BrokenPipeError:
             try:
@@ -435,6 +460,12 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             log("run: client gone, killed")
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            log("run: timeout %ds, killed" % timeout)
         except Exception as e:
             log("run error: %s" % e)
 

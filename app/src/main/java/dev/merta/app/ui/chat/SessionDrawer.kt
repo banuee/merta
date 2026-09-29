@@ -194,6 +194,15 @@ fun SessionDrawer(
             open = effortOpen,
             onToggle = { effortOpen = !effortOpen },
         )
+        if (!vm.modelSupportsEffort()) {
+            Text(
+                text = "модель без reasoning — effort не отправится",
+                fontFamily = MetroFonts.text,
+                fontSize = 12.sp,
+                color = scheme.textDim,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
         AnimatedVisibility(
             visible = effortOpen,
             enter = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(180)),

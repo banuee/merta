@@ -22,10 +22,12 @@ class MertaSettings(context: Context) {
     }
 
     object Efforts {
+        const val MINIMAL = "minimal"
         const val LOW = "low"
         const val MEDIUM = "medium"
         const val HIGH = "high"
-        val ALL = listOf(LOW, MEDIUM, HIGH)
+        const val XHIGH = "xhigh"
+        val ALL = listOf(MINIMAL, LOW, MEDIUM, HIGH, XHIGH)
     }
 
     object Presets {

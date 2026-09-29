@@ -369,8 +369,7 @@ fun ChatScreen(
                     .clip(RoundedCornerShape(MetroDimens.radiusSmall))
                     .background(scheme.accent.copy(alpha = 0.85f))
                     .metroClickable(targetScale = 0.88f) {
-                        vm.send(input)
-                        input = ""
+                        if (vm.send(input)) input = ""
                     }
                     .padding(horizontal = 18.dp, vertical = 12.dp),
             ) {

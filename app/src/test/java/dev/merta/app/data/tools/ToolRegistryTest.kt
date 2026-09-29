@@ -121,7 +121,7 @@ class ToolRegistryTest {
             ToolRegistry.daemonCmd(dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES, emptyMap()),
         )
         assertEquals(
-            "pm list packages merta",
+            "pm list packages 'merta'",
             ToolRegistry.daemonCmd(
                 dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES,
                 mapOf("filter" to "merta"),
@@ -216,7 +216,7 @@ class ToolRegistryTest {
         val out = reg.execute(
             ToolCall("1", ToolDefs.LIST_PACKAGES, mapOf("filter" to "merta")),
         ) { true }
-        assertEquals(listOf("pm list packages merta"), seen)
+        assertEquals(listOf("pm list packages 'merta'"), seen)
         assertTrue(out.contains("Success"))
     }
 
@@ -266,8 +266,7 @@ class ToolRegistryTest {
     }
 
     @Test
-    fun `summary never prints null`() {
-        val calls = listOf(
+    fun `summary never prints null`() {        val calls = listOf(
             ToolCall("1", ToolDefs.LIST_PACKAGES, emptyMap()),
             ToolCall("2", ToolDefs.LIST_DIR, emptyMap()),
             ToolCall("3", ToolDefs.GREP_SEARCH, mapOf("pattern" to "x")),
@@ -279,5 +278,31 @@ class ToolRegistryTest {
             assertFalse("null в подписи ${c.name}: $s", s.contains("null"))
         }
         assertTrue(ToolRegistry.summary(calls[0]).contains("все"))
+    }
+
+    @Test
+    fun `outsideScopePaths finds escapes`() {
+        val roots = listOf("/sdcard/work")
+        assertTrue(ToolRegistry.outsideScopePaths("ls -la", roots).isEmpty())
+        assertTrue(ToolRegistry.outsideScopePaths("cat /sdcard/work/a.txt", roots).isEmpty())
+        assertTrue(ToolRegistry.outsideScopePaths("/system/bin/sh -c ls", roots).isEmpty())
+        assertEquals(listOf("/etc/passwd"), ToolRegistry.outsideScopePaths("cat /etc/passwd", roots))
+        assertEquals(
+            listOf("/sdcard/secret"),
+            ToolRegistry.outsideScopePaths("cp /sdcard/work/a /sdcard/secret", roots),
+        )
+        assertEquals(listOf("/x"), ToolRegistry.outsideScopePaths("echo $(cat /x)", roots))
+    }
+
+    @Test
+    fun `run_command blocks paths outside scope`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val reg = daemonRegistry(seen, ToolRegistry.DaemonShellResult(0, "hi"))
+        val out = reg.execute(
+            ToolCall("1", ToolDefs.RUN_COMMAND, mapOf("command" to "cat /etc/passwd", "workdir" to "")),
+        ) { true }
+        assertTrue(seen.isEmpty())
+        assertTrue(out.contains("вне разрешённых папок"))
+        assertTrue(out.contains("/etc/passwd"))
     }
 }

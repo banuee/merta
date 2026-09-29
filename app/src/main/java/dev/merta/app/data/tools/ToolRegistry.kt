@@ -166,6 +166,14 @@ class ToolRegistry(
         val dir = resolvePath(workdir).ifBlank { defaultWorkdir }
         safError(dir)?.let { return it }
         gateway.check(dir, write = true)?.let { return "error: рабочая папка: $it" }
+        // Быстрая стена: абсолютные пути команды — только внутри скоупа
+        // (проверяется сама папка, workdir уже проверен выше).
+        val roots = gateway.currentScope().allowedRoots.filter { it.startsWith("/") }
+        val bad = outsideScopePaths(command, roots)
+        if (bad.isNotEmpty()) {
+            return "error: пути вне разрешённых папок: ${bad.take(5).joinToString(", ")} — " +
+                "добавь папку в Параметрах или убери путь"
+        }
         val shell = daemonShell
         if (shell != null) {
             // Shell телефона (права ADB/Shizuku): видит /sdcard, не видит приватные файлы приложения.
@@ -300,6 +308,28 @@ class ToolRegistry(
         /** POSIX-цитирование одного аргумента для sh -c (rish). */
         fun shQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
+        /** Системные префиксы: бинарники и данные ОС вне скоупа трогать можно. */
+        private val SYSTEM_PREFIXES = listOf(
+            "/system/", "/vendor/", "/apex/", "/product/", "/odm/",
+            "/system_ext/", "/proc/", "/dev/",
+        )
+
+        /**
+         * Абсолютные пути команды вне скоупа и системных префиксов.
+         * Чистый — покрыт JVM-тестами.
+         */
+        fun outsideScopePaths(command: String, roots: List<String>): List<String> {
+            val toks = command.split(Regex("""[\s'"`;|&()$]+""")).filter { it.startsWith("/") }
+            return toks.filter { t ->
+                val norm = t.trimEnd('/')
+                if (SYSTEM_PREFIXES.any { norm.startsWith(it) }) return@filter false
+                roots.none { r ->
+                    val rr = r.trimEnd('/')
+                    norm == rr || norm.startsWith(rr + "/")
+                }
+            }.distinct()
+        }
+
         /** Команда с заходом в рабочую папку (rish стартует где попало). */
         fun cdWrap(dir: String, command: String): String =
             if (dir.isBlank()) command else "cd ${shQuote(dir)} && $command"
@@ -323,7 +353,7 @@ class ToolRegistry(
                         "pm list packages"
                     } else {
                         if (" " in f || ";" in f || "|" in f || '\n' in f) return null
-                        "pm list packages $f"
+                        "pm list packages ${shQuote(f)}"
                     }
                 }
                 ShizukuCommand.TAP -> {

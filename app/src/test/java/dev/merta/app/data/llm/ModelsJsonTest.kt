@@ -34,6 +34,20 @@ class ModelsJsonTest {
     }
 
     @Test
+    fun `parses reasoning support`() {
+        val json = """{"data":[
+            {"id":"a","supported_parameters":["tools","reasoning"]},
+            {"id":"b","supported_parameters":["tools","temperature"]},
+            {"id":"c"}
+        ]}"""
+        val models = ModelsJson.parseModelsList(json)
+        assertEquals(3, models.size)
+        assertTrue(models[0].reasoningSupported)
+        assertTrue(!models[1].reasoningSupported)
+        assertTrue(models[2].reasoningSupported)
+    }
+
+    @Test
     fun `parses openrouter pricing per 1M`() {
         val json = """{"data":[
             {"id":"x/y","name":"Y","pricing":{"prompt":"0.000001","completion":"0.0000025","request":"0"}},

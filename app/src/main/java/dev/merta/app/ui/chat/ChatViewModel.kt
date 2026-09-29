@@ -73,6 +73,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var streamJob: Job? = null
+    /** Активные сетевые клиенты текущего хода — рвём в cancelStream. */
+    private var activeClient: OpenAiCompatClient? = null
+    private var activeAgy: dev.merta.app.bridge.AgyDaemonClient? = null
     private var currentTitle = "Новый чат"
     private var nextId = 1L
     private var approvalGate: CompletableDeferred<Boolean>? = null
@@ -95,7 +98,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 { cmd, t ->
                     try {
-                        val r = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl).shell(cmd, t)
+                        val r = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl, token = agy.apiKey).shell(cmd, t)
                         ToolRegistry.DaemonShellResult(r.code, r.output)
                     } catch (e: LlmException) {
                         if (e.status == -1) {
@@ -163,6 +166,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(pendingApproval = approval) }
         return try {
             gate.await()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Отмена во время диалога — останавливаем цикл, а не делаем лишние ходы.
+            throw e
         } catch (_: Exception) {
             false
         } finally {
@@ -201,7 +207,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val agy = settings.loadProviders().find { it.isAgy } ?: return@launch
-                val daemon = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl)
+                val daemon = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl, token = agy.apiKey)
                 val st = daemon.status()
                 if (!st.alive) {
                     daemonState.value = DaemonInfo(alive = false, note = "не отвечает")
@@ -364,7 +370,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                 val list = if (p.isAgy) {
                                     // Каталог из CLI (нужна авторизация), иначе фолбэк
                                     // + выбранная вручную модель, чтобы не терялась.
-                                    val daemon = dev.merta.app.bridge.AgyDaemonClient(p.baseUrl)
+                                    val daemon = dev.merta.app.bridge.AgyDaemonClient(p.baseUrl, token = p.apiKey)
                                     val live = daemon.models()
                                     val sel = settings.selectedModel(p.id)
                                     val merged = (live + dev.merta.app.bridge.AgyModels.FALLBACK)
@@ -422,6 +428,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isAgyActive(): Boolean = settings.activeProvider()?.isAgy == true
 
+    /** Effort для запроса: null, если модель из каталога явно без reasoning. */
+    fun effortForRequest(): String? {
+        val e = settings.load().effort ?: return null
+        val p = settings.activeProvider() ?: return e
+        val model = settings.selectedModel(p.id)
+        val flag = _state.value.groups.find { it.provider.id == p.id }
+            ?.models?.find { it.id == model }?.reasoningSupported
+        return if (flag == false) null else e
+    }
+
+    /** Поддержка effort текущей моделью (для пометки в меню). */
+    fun modelSupportsEffort(): Boolean {
+        val p = settings.activeProvider() ?: return true
+        val model = settings.selectedModel(p.id)
+        return _state.value.groups.find { it.provider.id == p.id }
+            ?.models?.find { it.id == model }?.reasoningSupported ?: true
+    }
+
     /** Тарифы текущей модели ($ за 1M). Нет — (0, 0). */
     fun pricingForCurrent(): Pair<Double, Double> {
         val p = settings.activeProvider() ?: return 0.0 to 0.0
@@ -443,7 +467,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         quotaError.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val client = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl)
+                val client = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl, token = agy.apiKey)
                 var groups = client.quota()
                 if (groups.isEmpty()) {
                     kotlinx.coroutines.delay(2000)
@@ -472,13 +496,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- отправка ----------
 
-    fun send(text: String) {
+    /** true — ход запущен; false — отказ (текст ввода не трогаем). */
+    fun send(text: String): Boolean {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _state.value.sending) return
-        if (!checkConfigured()) return
+        if (trimmed.isEmpty() || _state.value.sending) return false
+        if (!checkConfigured()) return false
         cancelStream(keepPartial = false)
         push(ChatMessage(nextId(), ChatMessage.Role.USER, trimmed))
         startTurn()
+        return true
     }
 
     /**
@@ -496,6 +522,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val kept = msgs.take(idx).toMutableList()
         kept.add(msgs[idx].copy(text = trimmed))
         _state.update { it.copy(messages = kept, streaming = null) }
+        // Серверный agy помнит старый промпт этой беседы — сбрасываем resume,
+        // иначе исправление уйдёт новым сообщением в старый контекст.
+        agyConversations.remove(_state.value.sessionId)
         startTurn()
     }
 
@@ -534,11 +563,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         val transcript = mutableListOf<TurnMessage>()
         if (system.isNotBlank()) transcript.add(TurnMessage("system", system))
+        // Хвост истории: без усечения длинные сессии раздувают тело и ловят 400/лимиты.
+        // Режем только по границе USER — хвост с ведущего assistant без своего
+        // пользователя строгие провайдеры отвергают 400.
+        val history = _state.value.messages
+            .filter { it.role == ChatMessage.Role.USER || it.role == ChatMessage.Role.ASSISTANT }
+            .takeLast(MAX_HISTORY)
+        val cut = history.indexOfFirst { it.role == ChatMessage.Role.USER }.takeIf { it >= 0 } ?: 0
         transcript.addAll(
-            _state.value.messages
-                .filter { it.role == ChatMessage.Role.USER || it.role == ChatMessage.Role.ASSISTANT }
-                // Хвост истории: без усечения длинные сессии раздувают тело и ловят 400/лимиты.
-                .takeLast(MAX_HISTORY)
+            history.drop(cut)
                 .map {
                     TurnMessage(
                         role = if (it.role == ChatMessage.Role.USER) "user" else "assistant",
@@ -547,7 +580,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 },
         )
         val client = makeProvider(provider) as OpenAiCompatClient
-        val effort = settings.load().effort
+        activeClient = client
+        // Effort шлём всем провайдерам (протокол у всех OpenAI-совместимый,
+        // 400-фолбэк в клиенте срежет неподдерживаемое), кроме моделей,
+        // которые в каталоге явно без reasoning.
+        val effort = effortForRequest()
         if (provider.isAgy) {
             startAgyTurn(provider, transcript, effort)
             return
@@ -592,8 +629,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 // Запечатать последний ход: стрим — в пузырь, Thought — готов.
                 sealTurn()
                 _state.update { it.copy(streaming = null, sending = false) }
+                activeClient = null
             } catch (e: LlmException) {
                 _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
+                activeClient = null
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
@@ -658,7 +697,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val model = settings.selectedModel(provider.id).ifBlank { null }
         val dirs = scopeState.value?.allowedRoots
             ?.filter { it.startsWith("/") && !it.startsWith("content://") } ?: emptyList()
-        val daemon = dev.merta.app.bridge.AgyDaemonClient(provider.baseUrl)
+        val daemon = dev.merta.app.bridge.AgyDaemonClient(provider.baseUrl, token = provider.apiKey)
+        activeAgy = daemon
         currentThoughtId = null
         _state.update { it.copy(sending = true, streaming = "") }
         streamJob = viewModelScope.launch {
@@ -738,8 +778,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 _state.update { it.copy(streaming = null, sending = false) }
+                activeAgy = null
             } catch (e: LlmException) {
                 _state.update { it.copy(streaming = null, sending = false, pendingApproval = null) }
+                activeAgy = null
                 if (e.status != CANCELLED) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, describeError(e)))
                 }
@@ -764,6 +806,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelStream(keepPartial: Boolean = true) {
         streamJob?.cancel()
         streamJob = null
+        // Рвём и сеть, иначе блокирующие execute()/forEachLine висят дальше.
+        activeClient?.cancel()
+        activeClient = null
+        activeAgy?.cancel()
+        activeAgy = null
+        approvalGate?.cancel()
+        approvalGate = null
         val partial = _state.value.streaming
         val now = System.currentTimeMillis()
         _state.update { st ->
