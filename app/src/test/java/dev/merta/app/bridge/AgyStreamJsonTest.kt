@@ -34,13 +34,43 @@ class AgyStreamJsonTest {
     @Test
     fun `parses tool step`() {
         val line = """{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"read_file"}}"""
-        assertEquals(listOf(AgyEvent.Tool("read_file")), AgyStreamJson.parseLine(line))
+        assertEquals(listOf(AgyEvent.Tool("read_file", "", false)), AgyStreamJson.parseLine(line))
     }
 
     @Test
     fun `parses tool done with tool_info name`() {
         val line = """{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_info":{"name":"bash","output":"ok"}}}"""
-        assertEquals(listOf(AgyEvent.Tool("bash — готово")), AgyStreamJson.parseLine(line))
+        assertEquals(listOf(AgyEvent.Tool("bash", "ok", true)), AgyStreamJson.parseLine(line))
+    }
+
+    @Test
+    fun `parses live 1_2_13 tool active with parameters`() {
+        val line = """{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"echo hello123"}}}}"""
+        assertEquals(
+            listOf(AgyEvent.Tool("run_command: echo hello123", "", false)),
+            AgyStreamJson.parseLine(line),
+        )
+    }
+
+    @Test
+    fun `parses live 1_2_13 tool done with output`() {
+        val line = """{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/etc/hostname"},"output":"1 lines, 0 bytes"}}}}"""
+        assertEquals(
+            listOf(AgyEvent.Tool("view_file: /etc/hostname", "1 lines, 0 bytes", true)),
+            AgyStreamJson.parseLine(line),
+        )
+    }
+
+    @Test
+    fun `parses multi-param details`() {
+        val line = """{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"tool","tool_name":"t","tool_info":{"name":"t","parameters":{"a":"1","b":"2"}}}}"""
+        assertEquals(listOf(AgyEvent.Tool("t(a=1, b=2)", "", false)), AgyStreamJson.parseLine(line))
+    }
+
+    @Test
+    fun `parses denied actions in result`() {
+        val line = """{"event":"result","result":{"status":"SUCCESS","response":"","denied_actions":[{"action":"command","display_name":"RunCommand"}]}}"""
+        assertEquals(listOf(AgyEvent.Done("", "", listOf("RunCommand"))), AgyStreamJson.parseLine(line))
     }
 
     @Test

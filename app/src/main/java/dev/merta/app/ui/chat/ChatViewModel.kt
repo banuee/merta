@@ -609,10 +609,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                 _state.update { s -> s.copy(streaming = (s.streaming ?: "") + ev.text) }
                             }
                             is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Tool -> {
-                                needThought()
-                                sealTurn()
-                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "⚙ " + ev.label))
-                                thoughtOpened = false
+                                if (!ev.done || currentThoughtId == null) {
+                                    // Старт вызова (или DONE без ACTIVE): свежий Thought
+                                    // с аргументами + пузырь. Результат придёт шагом в DONE.
+                                    sealTurn()
+                                    newTurn()
+                                    currentThoughtId?.let { addThinkStep(it, ev.details) }
+                                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "⚙ " + ev.details))
+                                    thoughtOpened = true
+                                } else if (ev.output.isNotBlank()) {
+                                    currentThoughtId?.let { addThinkStep(it, "→ " + ev.output.take(300)) }
+                                }
                             }
                             is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Done -> {
                                 needThought()
@@ -630,6 +637,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                     } else if (!streamed.contains(probe) && !r.contains(streamed.take(60).trim())) {
                                         push(ChatMessage(nextId(), ChatMessage.Role.ASSISTANT, r))
                                     }
+                                }
+                                if (ev.denied.isNotEmpty()) {
+                                    push(
+                                        ChatMessage(
+                                            nextId(), ChatMessage.Role.SYSTEM,
+                                            "agy: отклонено (нужен auto): " + ev.denied.joinToString(", "),
+                                        ),
+                                    )
                                 }
                             }
                             is dev.merta.app.bridge.AgyStreamJson.AgyEvent.Error -> {
