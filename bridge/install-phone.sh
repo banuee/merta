@@ -60,15 +60,20 @@ fi
 say "agy: ${AGY_BIN:-НЕ НАЙДЕН}"
 say "патчер: ${PPATCHER:-не найден}"
 say "rish: проверка…"
-[ -f "$HOME/rish" ] && chmod +x "$HOME/rish" 2>/dev/null
-RISH=""
-for c in "$HOME/rish" "$PREFIX/bin/rish"; do
-  if [ -f "$c" ]; then RISH="$c"; break; fi
-done
-RISH_OK=0
-if [ -n "$RISH" ]; then
-  if "$RISH" -c 'id' >/dev/null 2>&1 || sh "$RISH" -c 'id' >/dev/null 2>&1; then
-    RISH_OK=1
+RISH=""; RISH_OK=0
+if [ "${MERTA_SKIP_RISH:-0}" = "1" ]; then
+  say "rish: пропущен (MERTA_SKIP_RISH=1)"
+else
+  [ -f "$HOME/rish" ] && chmod +x "$HOME/rish" 2>/dev/null
+  for c in "$HOME/rish" "$PREFIX/bin/rish"; do
+    if [ -f "$c" ]; then RISH="$c"; break; fi
+  done
+  if [ -n "$RISH" ]; then
+    # timeout обязателен: rish может зависнуть в ожидании Shizuku.
+    if timeout 25 "$RISH" -c 'id' >/dev/null 2>&1 \
+       || timeout 25 sh "$RISH" -c 'id' >/dev/null 2>&1; then
+      RISH_OK=1
+    fi
   fi
 fi
 say "rish: ${RISH:-НЕ НАЙДЕН} (работает: $RISH_OK)"
