@@ -57,16 +57,11 @@ git push origin "$TAG_NAME" -f
 
 # 4. Создание GitHub Release
 echo "🌐 Создание релиза на GitHub..."
-RELEASE_PAYLOAD=$(cat <<EOF
-{
-  "tag_name": "$TAG_NAME",
-  "name": "Merta $TAG_NAME",
-  "body": "$CHANGELOG",
-  "draft": false,
-  "prerelease": false
-}
-EOF
-)
+RELEASE_PAYLOAD=$(jq -n \
+  --arg tag "$TAG_NAME" \
+  --arg name "Merta $TAG_NAME" \
+  --arg body "$CHANGELOG" \
+  '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')
 
 # Проверяем, существует ли уже такой релиз
 EXISTING_ID=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/releases/tags/$TAG_NAME" | grep -m1 '"id":' | sed -E 's/[^0-9]//g')
