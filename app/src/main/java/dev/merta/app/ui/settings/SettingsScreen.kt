@@ -234,6 +234,15 @@ fun SettingsScreen(
                 color = scheme.textDim,
             )
         }
+        Text(
+            "сбросить к умолчанию",
+            fontFamily = MetroFonts.text,
+            fontSize = 12.sp,
+            color = scheme.accent,
+            modifier = Modifier.metroClickable(targetScale = 0.97f) {
+                systemPrompt = AgentFiles.DEFAULT_SYSTEM
+            },
+        )
         Spacer(Modifier.height(6.dp))
         ShizukuRow(
             status = shizukuStatus.collectAsState().value,

@@ -49,7 +49,12 @@ class AgentFiles(context: Context) {
                     systemFile.writeText(DEFAULT_SYSTEM)
                     DEFAULT_SYSTEM
                 }
-                else -> text
+                // Точечная миграция протухших строк дефолта (остальное не трогаем).
+                else -> {
+                    val migrated = migrateSystemPrompt(text)
+                    if (migrated != text) systemFile.writeText(migrated)
+                    migrated
+                }
             }
         } catch (_: Exception) {
             DEFAULT_SYSTEM
@@ -198,10 +203,10 @@ class AgentFiles(context: Context) {
                 "- list_dir {\"path\"} — список файлов и папок.\n" +
                 "- grep_search {\"root\", \"pattern\"} — поиск подстроки по текстовым файлам.\n" +
                 "- write_file {\"path\", \"content\"} — создать/перезаписать файл ЦЕЛИКОМ. Спросит подтверждение у пользователя, придёт следующим ходом — вызывай смело.\n" +
-                "- run_command {\"command\", \"workdir\"?} — shell (sh -c, 60с). Тоже с подтверждением. Запрещены rm -rf /, mkfs, dd, форк-бомбы.\n" +
-                "- install_apk {\"path\"} — установить APK через Shizuku (только /sdcard/…). С подтверждением.\n" +
+                "- run_command {\"command\", \"workdir\"?} — shell телефона с правами ADB (sh -c, 60с). Тоже с подтверждением. Запрещены rm -rf /, mkfs, dd, форк-бомбы.\n" +
+                "- install_apk {\"path\"} — установить APK (только /sdcard/…). С подтверждением.\n" +
                 "- list_packages {\"filter\"?} — установленные пакеты.\n" +
-                "- tap_screen {\"x\", \"y\"} / swipe_screen {\"x1\",\"y1\",\"x2\",\"y2\"} — тап/свайп по экрану через Shizuku. С подтверждением.\n\n" +
+                "- tap_screen {\"x\", \"y\"} / swipe_screen {\"x1\",\"y1\",\"x2\",\"y2\"} — тап/свайп по экрану. С подтверждением.\n\n" +
                 "ПРАВИЛА:\n" +
                 "- Работай только внутри разрешённых папок из запроса (список приложен к каждому сообщению); наружу — нельзя, инструмент вернёт error.\n" +
                 "- Не выдумывай содержимое файлов — сначала read_file/list_dir/grep_search.\n" +
@@ -209,6 +214,28 @@ class AgentFiles(context: Context) {
                 "- Команды запускай с рабочей папкой внутри workspace."
 
         const val DEFAULT_MCP = "{\n  \"mcpServers\": {}\n}\n"
+
+        /**
+         * Точечная миграция system.md: меняет только протухшие строки дефолта
+         * (транспорт инструментов), остальной текст пользователя не трогает.
+         * Чистая — покрыта JVM-тестами.
+         */
+        fun migrateSystemPrompt(text: String): String {
+            var out = text
+            out = out.replace(
+                "установить APK через Shizuku (только /sdcard/…)",
+                "установить APK (только /sdcard/…)",
+            )
+            out = out.replace(
+                "тап/свайп по экрану через Shizuku",
+                "тап/свайп по экрану",
+            )
+            out = out.replace(
+                "— shell (sh -c, 60с)",
+                "— shell телефона с правами ADB (sh -c, 60с)",
+            )
+            return out
+        }
 
         /** name/description из YAML frontmatter SKILL.md (без полноценного YAML-парсера). */
         fun parseFrontmatter(content: String): Pair<String, String> {
