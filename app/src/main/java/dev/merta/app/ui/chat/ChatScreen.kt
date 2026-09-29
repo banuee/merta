@@ -219,6 +219,23 @@ fun ChatScreen(
             }
         }
 
+        // Баннер демона: мёртв — красная карточка с действиями, жив — тихая сводка.
+        if (ui.daemonDown) {
+            DaemonDownBanner(
+                onCopy = { vm.copyDaemonCommand(); clip.setText(AnnotatedString(ChatViewModel.DAEMON_INSTALL_CMD)) },
+                onTermux = { vm.openTermux() },
+                onRecheck = { vm.recheckDaemon() },
+            )
+        } else if (ui.daemonNote.isNotBlank()) {
+            Text(
+                text = ui.daemonNote,
+                fontFamily = MetroFonts.text,
+                fontSize = 11.sp,
+                color = scheme.textDim,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -327,6 +344,58 @@ fun HeaderIcon(glyph: String, onClick: () -> Unit) {
             fontSize = 20.sp,
             color = scheme.textDim,
         )
+    }
+}
+
+/** Баннер мёртвого демона: текст + копировать команду / Termux / проверить снова. */
+@Composable
+private fun DaemonDownBanner(onCopy: () -> Unit, onTermux: () -> Unit, onRecheck: () -> Unit) {
+    val scheme = LocalMetroScheme.current
+    var copied by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+            .background(scheme.red.copy(alpha = 0.16f))
+            .border(1.dp, scheme.red.copy(alpha = 0.6f), RoundedCornerShape(MetroDimens.radiusSmall))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+    ) {
+        Text(
+            text = "Демон merta-agy не отвечает — agy и инструменты устройства недоступны.",
+            fontFamily = MetroFonts.text,
+            fontSize = 13.sp,
+            color = scheme.text,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "В Termux: ~/bin/merta-agy (перезапуск) или полная установка командой ниже.",
+            fontFamily = MetroFonts.text,
+            fontSize = 12.sp,
+            color = scheme.textDim,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DaemonBtn(if (copied) "скопировано" else "команда", onClick = { onCopy(); copied = true })
+            DaemonBtn("termux", onClick = onTermux)
+            DaemonBtn("проверить", onClick = onRecheck)
+        }
+    }
+}
+
+@Composable
+private fun DaemonBtn(label: String, onClick: () -> Unit) {
+    val scheme = LocalMetroScheme.current
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+            .background(scheme.glass)
+            .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+            .metroClickable(targetScale = 0.93f, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    ) {
+        Text(text = label, fontFamily = MetroFonts.text, fontSize = 13.sp, color = scheme.text)
     }
 }
 

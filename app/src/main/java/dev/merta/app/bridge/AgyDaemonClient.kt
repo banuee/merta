@@ -25,6 +25,9 @@ class AgyDaemonClient(
         /** Код agy-autopatch check: 0 ок, 1 нужен патч, 2 agy нет, 3 гейты. -1 — демон не ответил. */
         val patchCode: Int = -1,
         val patchOutput: String = "",
+        val patcherBin: String = "",
+        val rishBin: String = "",
+        val rishOk: Boolean = false,
     )
 
     data class AgyRun(
@@ -48,6 +51,9 @@ class AgyDaemonClient(
                     agyVersion = SseParser.extractStringAfterKey(body, "agy_version", 0) ?: "",
                     patchCode = extractInt(body, "code") ?: -1,
                     patchOutput = SseParser.extractStringAfterKey(body, "output", 0) ?: "",
+                    patcherBin = SseParser.extractStringAfterKey(body, "patcher_bin", 0) ?: "",
+                    rishBin = SseParser.extractStringAfterKey(body, "rish_bin", 0) ?: "",
+                    rishOk = body.contains("\"rish_ok\": true"),
                 )
             }
         } catch (e: IOException) {
@@ -85,6 +91,35 @@ class AgyDaemonClient(
                 val out = SseParser.extractStringAfterKey(body, "output", 0) ?: ""
                 if (!resp.isSuccessful) throw LlmException(resp.code, out.ifBlank { resp.message })
                 return code to out
+            }
+        } catch (e: IOException) {
+            throw LlmException(-1, "демон merta-agy недоступен: ${e.message}")
+        }
+    }
+
+    /**
+     * Команда в Shizuku-shell телефона (POST /shell через rish).
+     * IOException — демон недоступен (LlmException(-1)).
+     */
+    data class ShellResult(val code: Int, val output: String)
+
+    suspend fun shell(command: String, timeoutS: Int = 60): ShellResult {
+        val payload = "{\"command\":\"" + SseParser.jsonEscape(command) +
+            "\",\"timeout_s\":" + timeoutS.coerceIn(5, 300) + "}"
+        val call = http.newCall(
+            Request.Builder().url(base() + "/shell").post(payload.toRequestBody(JSON)).build(),
+        )
+        try {
+            call.execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                val out = SseParser.extractStringAfterKey(body, "output", 0) ?: ""
+                val code = extractInt(body, "code") ?: -1
+                if (!resp.isSuccessful) {
+                    val msg = SseParser.extractStringAfterKey(body, "error", 0)
+                        ?: out.ifBlank { resp.message }
+                    throw LlmException(resp.code, msg)
+                }
+                return ShellResult(code, out)
             }
         } catch (e: IOException) {
             throw LlmException(-1, "демон merta-agy недоступен: ${e.message}")

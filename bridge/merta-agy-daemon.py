@@ -144,6 +144,45 @@ def rish_probe():
         return False
 
 
+def ensure_patcher():
+    """Патчера нет — ищем agy-autopatch*.zip (Download/дом) и распаковываем."""
+    global PATCHER
+    if PATCHER and os.path.isfile(PATCHER):
+        return PATCHER
+    zips = []
+    for d in ("/sdcard/Download",
+              os.path.join(THOME, "storage", "downloads"),
+              os.path.join(THOME, "Download"),
+              HOME, THOME, "/root", "/tmp"):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            nl = n.lower()
+            if nl.startswith("agy-autopatch") and nl.endswith(".zip"):
+                zips.append(os.path.join(d, n))
+    import zipfile
+    dest_dir = os.path.join(HOME, "agy-autopatch")
+    for z in zips:
+        try:
+            with zipfile.ZipFile(z) as zf:
+                for info in zf.infolist():
+                    base = os.path.basename(info.filename)
+                    if base == "agy-autopatch" and not info.is_dir():
+                        os.makedirs(dest_dir, exist_ok=True)
+                        target = os.path.join(dest_dir, "agy-autopatch")
+                        with zf.open(info) as src, open(target, "wb") as dst:
+                            dst.write(src.read())
+                        os.chmod(target, 0o755)
+                        PATCHER = target
+                        log("patcher unpacked from %s" % z)
+                        return PATCHER
+        except Exception as e:
+            log("unzip %s failed: %s" % (z, e))
+    return ""
+
+
 def find_creds_home(cfg):
     """HOME с закэшированными credentials (там agy залогинен)."""
     if cfg.get("agy_home") and os.path.isdir(cfg["agy_home"]):
@@ -275,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             code, out = run_patch_cmd(["check", "--quiet"], timeout=120)
             self._json({"ok": True, "agy_version": agy_version(),
                         "agy_bin": AGY, "creds_home": AGY_HOME,
+                        "patcher_bin": PATCHER,
                         "rish_bin": RISH, "rish_ok": rish_probe(),
                         "patch": {"code": code, "output": out[-1500:]}})
         elif self.path == "/models":
@@ -295,6 +335,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/patch":
+            ensure_patcher()
             code, out = run_patch_cmd(["patch"], timeout=300)
             log("patch -> %d" % code)
             self._json({"ok": code == 0, "code": code, "output": out[-4000:]})

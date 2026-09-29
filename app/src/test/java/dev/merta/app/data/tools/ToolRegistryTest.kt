@@ -99,4 +99,169 @@ class ToolRegistryTest {
         assertEquals(1, approvals)
         assertFalse(File(dir, "new2.txt").exists())
     }
+
+    @Test
+    fun `shQuote escapes single quotes`() {
+        assertEquals("'abc'", ToolRegistry.shQuote("abc"))
+        assertEquals("'a'\\''b'", ToolRegistry.shQuote("a'b"))
+        assertEquals("'/sdcard/Download/app v2.apk'", ToolRegistry.shQuote("/sdcard/Download/app v2.apk"))
+    }
+
+    @Test
+    fun `daemonCmd builds safe shell lines`() {
+        assertEquals(
+            "pm install -r -d '/sdcard/Download/app.apk'",
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.INSTALL_APK,
+                mapOf("apk" to "/sdcard/Download/app.apk"),
+            ),
+        )
+        assertEquals(
+            "pm list packages",
+            ToolRegistry.daemonCmd(dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES, emptyMap()),
+        )
+        assertEquals(
+            "pm list packages merta",
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES,
+                mapOf("filter" to "merta"),
+            ),
+        )
+        assertEquals(
+            "input tap 100 200",
+            ToolRegistry.daemonCmd(dev.merta.app.adb.ShizukuCommand.TAP, mapOf("x" to "100", "y" to "200")),
+        )
+        assertEquals(
+            "input swipe 1 2 3 4 300",
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.SWIPE,
+                mapOf("x1" to "1", "y1" to "2", "x2" to "3", "y2" to "4"),
+            ),
+        )
+    }
+
+    @Test
+    fun `daemonCmd rejects injection`() {
+        // Траверс и ; в пути APK.
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.INSTALL_APK,
+                mapOf("apk" to "/sdcard/../x.apk"),
+            ),
+        )
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.INSTALL_APK,
+                mapOf("apk" to "/sdcard/a.apk;reboot"),
+            ),
+        )
+        // Приватный путь приложения.
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.INSTALL_APK,
+                mapOf("apk" to "/data/data/dev.merta.app/x.apk"),
+            ),
+        )
+        // Пробел/пайп в фильтре пакетов.
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(
+                dev.merta.app.adb.ShizukuCommand.LIST_PACKAGES,
+                mapOf("filter" to "a b"),
+            ),
+        )
+        // Не-числа и минусы в координатах.
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(dev.merta.app.adb.ShizukuCommand.TAP, mapOf("x" to "1;id", "y" to "2")),
+        )
+        assertEquals(
+            null,
+            ToolRegistry.daemonCmd(dev.merta.app.adb.ShizukuCommand.TAP, mapOf("x" to "-5", "y" to "2")),
+        )
+    }
+
+    @Test
+    fun `cdWrap prefixes workdir`() {
+        assertEquals("ls", ToolRegistry.cdWrap("", "ls"))
+        assertEquals("cd '/tmp/x' && ls", ToolRegistry.cdWrap("/tmp/x", "ls"))
+    }
+
+    private fun daemonRegistry(
+        seen: MutableList<String>,
+        result: ToolRegistry.DaemonShellResult = ToolRegistry.DaemonShellResult(0, "Success"),
+    ): ToolRegistry {
+        val gateway = object : FileGateway {
+            override suspend fun currentScope() =
+                WorkspaceScope("t", listOf(dir.absolutePath), emptyList())
+            override suspend fun saveScope(scope: WorkspaceScope) {}
+            override suspend fun check(path: String, write: Boolean): String? = null
+        }
+        return ToolRegistry(
+            gateway, dir.absolutePath, autoApprove = true, shizuku = null,
+            daemonShell = { cmd, _ ->
+                seen.add(cmd)
+                result
+            },
+        )
+    }
+
+    @Test
+    fun `privileged tools go through daemon shell`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val reg = daemonRegistry(seen)
+        val out = reg.execute(
+            ToolCall("1", ToolDefs.LIST_PACKAGES, mapOf("filter" to "merta")),
+        ) { true }
+        assertEquals(listOf("pm list packages merta"), seen)
+        assertTrue(out.contains("Success"))
+    }
+
+    @Test
+    fun `daemon error code surfaces as error`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val reg = daemonRegistry(seen, ToolRegistry.DaemonShellResult(1, "Failure [INSTALL_FAILED]"))
+        val out = reg.execute(
+            ToolCall("1", ToolDefs.INSTALL_APK, mapOf("path" to "/sdcard/Download/a.apk")),
+        ) { true }
+        assertEquals(listOf("pm install -r -d '/sdcard/Download/a.apk'"), seen)
+        assertTrue(out.startsWith("error:"))
+    }
+
+    @Test
+    fun `daemon transport failure hints at restart`() = runBlocking {
+        val gateway = object : FileGateway {
+            override suspend fun currentScope() =
+                WorkspaceScope("t", listOf(dir.absolutePath), emptyList())
+            override suspend fun saveScope(scope: WorkspaceScope) {}
+            override suspend fun check(path: String, write: Boolean): String? = null
+        }
+        val reg = ToolRegistry(
+            gateway, dir.absolutePath, autoApprove = true, shizuku = null,
+            daemonShell = { _, _ -> throw java.io.IOException("refused") },
+        )
+        val out = reg.execute(ToolCall("1", ToolDefs.TAP_SCREEN, mapOf("x" to "1", "y" to "2"))) { true }
+        assertTrue(out.contains("демон недоступен"))
+        assertTrue(out.contains("~/bin/merta-agy"))
+    }
+
+    @Test
+    fun `run_command via daemon wraps workdir`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val reg = daemonRegistry(seen, ToolRegistry.DaemonShellResult(0, "hi"))
+        val out = reg.execute(
+            ToolCall("1", ToolDefs.RUN_COMMAND, mapOf("command" to "ls", "workdir" to "")),
+        ) { true }
+        assertEquals(listOf("cd '${dir.absolutePath}' && ls"), seen)
+        assertTrue(out.contains("[exit 0]"))
+    }
+
+    @Test
+    fun `no daemon no shizuku explains`() = runBlocking {
+        val out = registry.execute(ToolCall("1", ToolDefs.TAP_SCREEN, mapOf("x" to "1", "y" to "2"))) { true }
+        assertTrue(out.contains("демона"))
+    }
 }

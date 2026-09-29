@@ -10,7 +10,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Выполнение инструментов. Чистые эвристики (поиск файлов, чтение кусками) —
  * в companion, покрыты JVM-тестами. Сам запуск — через FileGateway.
- * Shizuku-инструменты (install/tap) — через [ShizukuOps], без него — ошибка.
+ * Привилегированные операции (install/tap/run_command): сначала Shizuku-shell
+ * телефона через демона ([daemonShell], rish — постоянный доступ, грант
+ * Shizuku приложению не нужен), без него — [ShizukuOps]/локально.
  */
 class ToolRegistry(
     private val gateway: FileGateway,
@@ -19,7 +21,12 @@ class ToolRegistry(
     private val autoApprove: Boolean = false,
     /** Привилегированные операции (null — Shizuku недоступен). */
     private val shizuku: ShizukuOps? = null,
+    /** Shell телефона через демона (null — демон недоступен). */
+    private val daemonShell: (suspend (command: String, timeoutS: Int) -> DaemonShellResult)? = null,
 ) {
+
+    /** Результат Shizuku-shell через демона (rish). */
+    data class DaemonShellResult(val code: Int, val output: String)
 
     suspend fun execute(
         call: ToolCall,
@@ -159,6 +166,17 @@ class ToolRegistry(
         val dir = resolvePath(workdir).ifBlank { defaultWorkdir }
         safError(dir)?.let { return it }
         gateway.check(dir, write = true)?.let { return "error: рабочая папка: $it" }
+        val shell = daemonShell
+        if (shell != null) {
+            // Shell телефона (права ADB/Shizuku): видит /sdcard, не видит приватные файлы приложения.
+            return try {
+                val r = shell(cdWrap(dir, command), 60)
+                if (r.code != 0) "error: [exit ${r.code}]\n${r.output.take(MAX_OUTPUT)}".trimEnd()
+                else "[exit 0]\n${r.output.take(MAX_OUTPUT)}".trimEnd().ifBlank { "[exit 0]" }
+            } catch (e: Exception) {
+                "error: демон недоступен: ${e.message} — подними в Termux: ~/bin/merta-agy"
+            }
+        }
         val dirFile = File(dir)
         if (!dirFile.isDirectory) return "error: нет папки: $dir"
         return try {
@@ -178,35 +196,71 @@ class ToolRegistry(
         }
     }
 
+    /** Привилегированная команда: демон (rish) → Shizuku → ошибка с подсказкой. */
+    private suspend fun privCmd(command: ShizukuCommand, args: Map<String, String>): String {
+        val cmd = daemonCmd(command, args)
+            ?: return "error: недопустимые аргументы для ${command.name}"
+        val shell = daemonShell
+        if (shell != null) {
+            return try {
+                val r = shell(cmd, 60)
+                if (r.code != 0) {
+                    "error: ${command.name.lowercase()}: ${r.output.take(500).ifBlank { "exit ${r.code}" }}"
+                } else {
+                    mapPrivOk(command, r.output)
+                }
+            } catch (e: Exception) {
+                "error: демон недоступен: ${e.message} — подними в Termux: ~/bin/merta-agy"
+            }
+        }
+        val ops = shizuku ?: return "error: shizuku недоступен — подними демона (~/bin/merta-agy) или запусти Shizuku"
+        val r = ops.run(command, args)
+        if (r.exitCode != 0) {
+            return "error: ${command.name.lowercase()}: ${r.stderr.ifBlank { r.stdout }.take(500)}"
+        }
+        return mapPrivOk(command, r.stdout)
+    }
+
+    private fun mapPrivOk(command: ShizukuCommand, stdout: String): String = when (command) {
+        ShizukuCommand.INSTALL_APK ->
+            if ("Success" in stdout) "ok: пакет установлен" else "pm install: ${stdout.take(500)}"
+        ShizukuCommand.LIST_PACKAGES -> stdout.ifBlank { "(пусто)" }.take(MAX_OUTPUT)
+        ShizukuCommand.TAP -> "ok: тап выполнен"
+        ShizukuCommand.SWIPE -> "ok: свайп выполнен"
+        else -> stdout.take(500)
+    }
+
     private suspend fun installApk(path: String): String {
-        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
-        val r = ops.run(ShizukuCommand.INSTALL_APK, mapOf("apk" to path))
-        if (r.exitCode != 0) return "error: pm install: ${r.stderr.ifBlank { r.stdout }.take(500)}"
-        return if ("Success" in r.stdout) "ok: пакет установлен" else "pm install: ${r.stdout.take(500)}"
+        val ops = shizuku
+        val shell = daemonShell
+        if (shell == null && ops == null) {
+            return "error: shizuku недоступен — подними демона (~/bin/merta-agy) или запусти Shizuku"
+        }
+        return privCmd(ShizukuCommand.INSTALL_APK, mapOf("apk" to path))
     }
 
     private suspend fun listPackages(filter: String): String {
-        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
-        val r = ops.run(ShizukuCommand.LIST_PACKAGES, mapOf("filter" to filter))
-        if (r.exitCode != 0) return "error: pm list: ${r.stderr.ifBlank { r.stdout }.take(500)}"
-        return r.stdout.ifBlank { "(пусто)" }.take(MAX_OUTPUT)
+        if (daemonShell == null && shizuku == null) {
+            return "error: shizuku недоступен — подними демона (~/bin/merta-agy) или запусти Shizuku"
+        }
+        return privCmd(ShizukuCommand.LIST_PACKAGES, mapOf("filter" to filter))
     }
 
     private suspend fun tapScreen(x: String, y: String): String {
-        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
-        val r = ops.run(ShizukuCommand.TAP, mapOf("x" to x, "y" to y))
-        if (r.exitCode != 0) return "error: tap: ${r.stderr.ifBlank { r.stdout }.take(300)}"
-        return "ok: тап $x,$y"
+        if (daemonShell == null && shizuku == null) {
+            return "error: shizuku недоступен — подними демона (~/bin/merta-agy) или запусти Shizuku"
+        }
+        return privCmd(ShizukuCommand.TAP, mapOf("x" to x, "y" to y))
     }
 
     private suspend fun swipeScreen(x1: String, y1: String, x2: String, y2: String): String {
-        val ops = shizuku ?: return "error: shizuku недоступен — поставь и запусти Shizuku"
-        val r = ops.run(
+        if (daemonShell == null && shizuku == null) {
+            return "error: shizuku недоступен — подними демона (~/bin/merta-agy) или запусти Shizuku"
+        }
+        return privCmd(
             ShizukuCommand.SWIPE,
             mapOf("x1" to x1, "y1" to y1, "x2" to x2, "y2" to y2),
         )
-        if (r.exitCode != 0) return "error: swipe: ${r.stderr.ifBlank { r.stdout }.take(300)}"
-        return "ok: свайп $x1,$y1 → $x2,$y2"
     }
 
     companion object {
@@ -241,6 +295,50 @@ class ToolRegistry(
 
         /** Эвристика бинарника: нулевой байт в первых 4К. */
         fun isBinarySample(bytes: ByteArray): Boolean = bytes.any { it == 0.toByte() }
+
+        /** POSIX-цитирование одного аргумента для sh -c (rish). */
+        fun shQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+
+        /** Команда с заходом в рабочую папку (rish стартует где попало). */
+        fun cdWrap(dir: String, command: String): String =
+            if (dir.isBlank()) command else "cd ${shQuote(dir)} && $command"
+
+        /**
+         * Та же валидация, что ShizukuOpsImpl.buildArgv, но строкой для rish.
+         * null — аргументы не прошли (модель получит честную ошибку).
+         */
+        fun daemonCmd(command: ShizukuCommand, args: Map<String, String>): String? {
+            return when (command) {
+                ShizukuCommand.INSTALL_APK -> {
+                    val apk = args["apk"]?.trim().orEmpty()
+                    if (apk.isBlank() || !apk.endsWith(".apk")) return null
+                    if (!apk.startsWith("/sdcard/") && !apk.startsWith("/storage/")) return null
+                    if (".." in apk || '\n' in apk || ';' in apk) return null
+                    "pm install -r -d ${shQuote(apk)}"
+                }
+                ShizukuCommand.LIST_PACKAGES -> {
+                    val f = args["filter"]?.trim().orEmpty()
+                    if (f.isEmpty()) {
+                        "pm list packages"
+                    } else {
+                        if (" " in f || ";" in f || "|" in f || '\n' in f) return null
+                        "pm list packages $f"
+                    }
+                }
+                ShizukuCommand.TAP -> {
+                    val x = args["x"]?.trim()?.toIntOrNull()?.takeIf { it >= 0 } ?: return null
+                    val y = args["y"]?.trim()?.toIntOrNull()?.takeIf { it >= 0 } ?: return null
+                    "input tap $x $y"
+                }
+                ShizukuCommand.SWIPE -> {
+                    val p = listOf("x1", "y1", "x2", "y2").map {
+                        args[it]?.trim()?.toIntOrNull()?.takeIf { v -> v >= 0 } ?: return null
+                    }
+                    "input swipe ${p[0]} ${p[1]} ${p[2]} ${p[3]} 300"
+                }
+                else -> null
+            }
+        }
     }
 }
 

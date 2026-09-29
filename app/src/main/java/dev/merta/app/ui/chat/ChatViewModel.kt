@@ -1,6 +1,10 @@
 package dev.merta.app.ui.chat
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.merta.app.data.agent.AgentFiles
@@ -56,6 +60,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val modelsError: String? = null,
         /** Ожидающее подтверждение деструктивного вызова (диалог). */
         val pendingApproval: PendingApproval? = null,
+        /** Демон merta-agy недоступен (баннер с командой запуска). */
+        val daemonDown: Boolean = false,
+        /** Короткая сводка демона (версия agy, патч, rish). */
+        val daemonNote: String = "",
     )
 
     private val settings = MertaSettings(app)
@@ -80,11 +88,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Дефолт для относительных путей — первая папка пользователя;
         // пусто — относительные резолвить не во что, gateway вернёт подсказку.
         val defaultWorkdir = scopeState.value?.allowedRoots?.firstOrNull() ?: ""
+        val agy = settings.loadProviders().find { it.isAgy }
+        val daemon: (suspend (String, Int) -> ToolRegistry.DaemonShellResult)? =
+            if (agy == null || !daemonState.value.alive) {
+                null
+            } else {
+                { cmd, t ->
+                    try {
+                        val r = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl).shell(cmd, t)
+                        ToolRegistry.DaemonShellResult(r.code, r.output)
+                    } catch (e: LlmException) {
+                        if (e.status == -1) {
+                            daemonState.value = DaemonInfo(alive = false, note = "упал во время вызова")
+                            _state.update { it.copy(daemonDown = true) }
+                        }
+                        throw e
+                    }
+                }
+            }
         return ToolRegistry(
             FileGatewayImpl(store), defaultWorkdir,
-            settings.loadAutoApprove(), dev.merta.app.adb.ShizukuOpsImpl(app),
+            settings.loadAutoApprove(), dev.merta.app.adb.ShizukuOpsImpl(app), daemon,
         )
     }
+
+    /** Состояние демона для баннера и маршрутизации инструментов. */
+    data class DaemonInfo(val alive: Boolean = false, val note: String = "")
+    val daemonState = MutableStateFlow(DaemonInfo())
 
     /** Статус Shizuku для настроек (обновляется по запросу). */
     val shizukuStatus = MutableStateFlow(dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING)
@@ -144,18 +174,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             store.scopeFlow.collect { scopeState.value = it }
         }
-        // Автопатч agy при входе: демон отвечает → check → слетел → patch.
-        // Демона нет — тихо, agy просто будет недоступен.
+        // Проверка демона при входе: патч-слет → автопатч, демона нет → баннер.
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 dev.merta.app.adb.ShizukuOpsImpl(getApplication()).addPermissionListener(shizukuPermListener)
             } catch (_: Exception) {
             }
+        }
+        recheckDaemon()
+    }
+
+    /** Проверка демона: статус, автопатч при слетевшем патче, баннер если мёртв. */
+    fun recheckDaemon() {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val agy = settings.loadProviders().find { it.isAgy } ?: return@launch
                 val daemon = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl)
                 val st = daemon.status()
-                if (!st.alive) return@launch
+                if (!st.alive) {
+                    daemonState.value = DaemonInfo(alive = false, note = "не отвечает")
+                    _state.update { it.copy(daemonDown = true, daemonNote = "") }
+                    return@launch
+                }
+                val note = buildString {
+                    append(st.agyVersion.ifBlank { "agy" })
+                    append(if (st.patchCode == 0) " · патч ок" else " · патч: код ${st.patchCode}")
+                    append(if (st.rishOk) " · rish ок" else " · rish нет")
+                }
+                daemonState.value = DaemonInfo(alive = true, note = note)
+                _state.update { it.copy(daemonDown = false, daemonNote = note) }
                 if (st.patchCode == 1) {
                     push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "agy: патч слетел, перепатчиваю…"))
                     try {
@@ -171,7 +218,27 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             } catch (_: Exception) {
+                daemonState.value = DaemonInfo(alive = false, note = "ошибка проверки")
+                _state.update { it.copy(daemonDown = true) }
             }
+        }
+    }
+
+    /** Команда установки демона в буфер обмена (из баннера). */
+    fun copyDaemonCommand() {
+        val app = getApplication<Application>()
+        val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        cm.setPrimaryClip(ClipData.newPlainText("merta-agy", DAEMON_INSTALL_CMD))
+    }
+
+    /** Открыть Termux для ручного подъёма демона (из баннера). */
+    fun openTermux() {
+        val app = getApplication<Application>()
+        try {
+            val i = app.packageManager.getLaunchIntentForPackage("com.termux") ?: return
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            app.startActivity(i)
+        } catch (_: Exception) {
         }
     }
 
@@ -499,7 +566,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val sessionId = _state.value.sessionId
         val system = transcript.firstOrNull { it.role == "system" }?.content.orEmpty()
         val convId = agyConversations[sessionId]
-        val prompt = if (convId == null && system.isNotBlank()) "$system\n\n$lastUser" else lastUser
+        // Первый ход беседы: к системному добавляем доку по устройству (мост /shell).
+        val prompt = if (convId == null && system.isNotBlank()) {
+            "$system$AGY_DEVICE_SECTION\n\n$lastUser"
+        } else {
+            lastUser
+        }
         val model = settings.selectedModel(provider.id).ifBlank { null }
         val dirs = scopeState.value?.allowedRoots
             ?.filter { it.startsWith("/") && !it.startsWith("content://") } ?: emptyList()
@@ -705,6 +777,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         const val CANCELLED = -2
         const val SHIZUKU_PERM_CODE = 5101
+
+        /** Установка/обновление демона одной командой в Termux. */
+        const val DAEMON_INSTALL_CMD =
+            "curl -fsSL https://raw.githubusercontent.com/banuee/merta/main/bridge/install-phone.sh | bash"
+
+        /**
+         * Устройство для agy-сессий: CLI работает в Linux-proot, а команды
+         * ТЕЛЕФОНА идут через мост /shell (Shizuku-права, постоянный доступ).
+         * Дописывается к системному промту на первом ходу беседы.
+         */
+        const val AGY_DEVICE_SECTION =
+            "\n\nУСТРОЙСТВО (ты работаешь прямо на телефоне; твои shell-команды идут " +
+                "в Linux-окружение proot, а команды ТЕЛЕФОНА — через мост, curl-ом):\n" +
+                "- shell телефона: curl -s -X POST 127.0.0.1:18080/shell " +
+                "-H \"Content-Type: application/json\" -d '{\"command\":\"ТВОЯ КОМАНДА\"}'\n" +
+                "- установить APK: {\"command\":\"pm install -r /sdcard/Download/файл.apk\"}\n" +
+                "- тап/свайп: {\"command\":\"input tap X Y\"}, " +
+                "{\"command\":\"input swipe X1 Y1 X2 Y2 300\"}\n" +
+                "- пакеты: {\"command\":\"pm list packages часть.имени\"}, " +
+                "открыть приложение: {\"command\":\"monkey -p имя.пакета " +
+                "-c android.intent.category.LAUNCHER 1\"}\n" +
+                "- пути телефона: /sdcard/… (= /storage/emulated/0). " +
+                "Рабочие папки из запроса уже проброшены тебе через --add-dir."
 
         /** Хвост reasoning, хранимый в Thought (память + JSON истории). */
         const val MAX_THOUGHT_CHARS = 4000
