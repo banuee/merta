@@ -279,6 +279,9 @@ def build_agy_cmd(body):
     if cid:
         cmd += ["--conversation", cid]
     effort = (body.get("effort") or "").strip().lower()
+    if effort not in ("low", "medium", "high", "max") and needs_effort(model):
+        # agy 1.2.13+: gemini/gpt-oss без --effort вообще отказываются работать.
+        effort = "medium"
     if effort in ("low", "medium", "high", "max") and needs_effort(model):
         cmd += ["--effort", effort]
     if body.get("yolo"):
