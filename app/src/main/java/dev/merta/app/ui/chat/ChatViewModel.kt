@@ -897,7 +897,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
                             override fun onToolStart(name: String, summary: String) {
                                 // Tool-вызов виден своим пузырём — в Thought не дублируем.
-                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "⚙ " + summary))
+                                push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "\uF013 " + summary))
                             }
 
                             override suspend fun onApproval(approval: PendingApproval): Boolean {
@@ -1056,7 +1056,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                     sealTurn()
                                     newTurn()
                                     currentThoughtId?.let { addThinkStep(it, ev.details) }
-                                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "⚙ " + ev.details))
+                                    push(ChatMessage(nextId(), ChatMessage.Role.SYSTEM, "\uF013 " + ev.details))
                                     thoughtOpened = true
                                 } else if (ev.output.isNotBlank()) {
                                     currentThoughtId?.let { addThinkStep(it, "→ " + ev.output.take(300)) }

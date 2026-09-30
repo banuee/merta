@@ -37,9 +37,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -316,12 +318,23 @@ fun ChatScreen(
                         .metroClickable(targetScale = 0.93f) { showContextDialog = true }
                         .padding(horizontal = 8.dp, vertical = 7.dp),
                 ) {
-                    Text(
-                        text = "⚠ ${ui.contextPercent}%",
-                        fontFamily = MetroFonts.text,
-                        fontSize = 13.sp,
-                        color = scheme.red,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "\uF071",
+                            fontFamily = MetroFonts.icon,
+                            fontSize = 12.sp,
+                            color = scheme.red,
+                        )
+                        Text(
+                            text = "${ui.contextPercent}%",
+                            fontFamily = MetroFonts.text,
+                            fontSize = 13.sp,
+                            color = scheme.red,
+                        )
+                    }
                 }
             }
         }
@@ -362,6 +375,9 @@ fun ChatScreen(
             }
         }
 
+        val lastAssistantMsg = ui.messages.lastOrNull { it.role == ChatMessage.Role.ASSISTANT }
+        val lastUserMsg = ui.messages.lastOrNull { it.role == ChatMessage.Role.USER }
+
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -372,7 +388,10 @@ fun ChatScreen(
                 if (msg.role == ChatMessage.Role.THINKING && thought != null) {
                     ThoughtRow(thought, Modifier.animateItem())
                 } else {
-                    val isLastUser = msg.id == ui.messages.lastOrNull { it.role == ChatMessage.Role.USER }?.id
+                    val isLastAssistant = msg.id == lastAssistantMsg?.id
+                    val isUser = msg.role == ChatMessage.Role.USER
+                    val canRetryMenu = !isWorking && (isLastAssistant || isUser)
+
                     MessageBubble(
                         msg = msg,
                         showMenu = menuFor == msg.id,
@@ -387,13 +406,14 @@ fun ChatScreen(
                             editText = msg.text
                             editing = msg
                         },
-                        onRetry = if (!isWorking && (msg.role == ChatMessage.Role.ASSISTANT || msg.role == ChatMessage.Role.SYSTEM || isLastUser)) {
+                        onRetry = if (canRetryMenu) {
                             {
                                 menuFor = null
                                 vm.retryFromMessage(msg.id)
                             }
                         } else null,
-                        canEdit = msg.role == ChatMessage.Role.USER && !ui.sending,
+                        showInlineRetry = isLastAssistant && !isWorking,
+                        canEdit = isUser && !ui.sending,
                         modifier = Modifier.animateItem(),
                     )
                 }
@@ -408,6 +428,7 @@ fun ChatScreen(
                         onCopy = {},
                         onEdit = {},
                         canEdit = false,
+                        showInlineRetry = false,
                     )
                 }
             }
@@ -416,13 +437,24 @@ fun ChatScreen(
         if (pendingAtts.isNotEmpty()) {
             Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                 if (!vm.modelSupportsVision() && pendingAtts.any { it.isImage }) {
-                    Text(
-                        text = "⚠ Модель может не поддерживать изображения",
-                        fontFamily = MetroFonts.text,
-                        fontSize = 11.sp,
-                        color = scheme.red,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.padding(bottom = 4.dp),
-                    )
+                    ) {
+                        Text(
+                            text = "\uF071",
+                            fontFamily = MetroFonts.icon,
+                            fontSize = 11.sp,
+                            color = scheme.red,
+                        )
+                        Text(
+                            text = "Модель может не поддерживать изображения",
+                            fontFamily = MetroFonts.text,
+                            fontSize = 11.sp,
+                            color = scheme.red,
+                        )
+                    }
                 }
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -439,9 +471,11 @@ fun ChatScreen(
                                 .padding(horizontal = 8.dp, vertical = 4.dp),
                         ) {
                             Text(
-                                text = if (att.isImage) "🖼" else "📎",
+                                text = if (att.isImage) "\uF03E" else "\uF15B",
+                                fontFamily = MetroFonts.icon,
                                 fontSize = 12.sp,
-                                modifier = Modifier.padding(end = 4.dp),
+                                color = scheme.accent,
+                                modifier = Modifier.padding(end = 5.dp),
                             )
                             Text(
                                 text = att.name.take(18) + (if (att.name.length > 18) "…" else ""),
@@ -451,9 +485,9 @@ fun ChatScreen(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = "×",
-                                fontFamily = MetroFonts.headline,
-                                fontSize = 14.sp,
+                                text = "\uF00D",
+                                fontFamily = MetroFonts.icon,
+                                fontSize = 11.sp,
                                 color = scheme.textDim,
                                 modifier = Modifier
                                     .metroClickable(targetScale = 0.85f) { vm.removePendingAttachment(idx) }
@@ -484,20 +518,22 @@ fun ChatScreen(
                     .metroClickable(targetScale = 0.92f) {
                         showAttachMenu = true
                     }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
                 Text(
-                    text = "📎",
-                    fontSize = 15.sp,
+                    text = "\uF0C6",
+                    fontFamily = MetroFonts.icon,
+                    fontSize = 16.sp,
                     color = if (pendingAtts.isNotEmpty()) scheme.accent else scheme.textDim,
                 )
-                DropdownMenu(
+                MetroDropdownMenu(
                     expanded = showAttachMenu,
                     onDismissRequest = { showAttachMenu = false },
-                    containerColor = scheme.glassDeep,
+                    focusable = false,
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Фото и видео", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                    MetroMenuItem(
+                        iconGlyph = "\uF03E",
+                        text = "Фото и видео",
                         onClick = {
                             showAttachMenu = false
                             try {
@@ -506,15 +542,14 @@ fun ChatScreen(
                                 filePicker.launch(arrayOf("image/*", "video/*"))
                             }
                         },
-                        colors = MenuDefaults.itemColors(textColor = scheme.text),
                     )
-                    DropdownMenuItem(
-                        text = { Text("Любой файл", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                    MetroMenuItem(
+                        iconGlyph = "\uF15B",
+                        text = "Документ / файл",
                         onClick = {
                             showAttachMenu = false
                             filePicker.launch(arrayOf("*/*"))
                         },
-                        colors = MenuDefaults.itemColors(textColor = scheme.text),
                     )
                 }
             }
@@ -564,9 +599,9 @@ fun ChatScreen(
                     .padding(horizontal = 18.dp, vertical = 12.dp),
             ) {
                 Text(
-                    text = if (isWorking) "■" else "→",
+                    text = if (isWorking) "\uF04D" else "\uF1D8",
+                    fontFamily = MetroFonts.icon,
                     fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
                     color = Color.White,
                 )
             }
@@ -849,7 +884,69 @@ private fun ThoughtRow(thought: ThoughtData, modifier: Modifier = Modifier) {
     }
 }
 
-/** Пузырь сообщения: лонгпресс — меню (копировать / изменить), ответы — markdown. */
+/** Выпадающее меню в стиле Quickshell Metro. */
+@Composable
+private fun MetroDropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    focusable: Boolean = true,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    val scheme = LocalMetroScheme.current
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        modifier = modifier
+            .border(1.dp, scheme.strokeStrong, RoundedCornerShape(MetroDimens.radiusSmall))
+            .background(scheme.glassDeep),
+        shape = RoundedCornerShape(MetroDimens.radiusSmall),
+        containerColor = scheme.glassDeep,
+        shadowElevation = 12.dp,
+        properties = PopupProperties(
+            focusable = focusable,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+        content = content,
+    )
+}
+
+/** Элемент выпадающего меню в стиле Metro с Nerd Font иконкой. */
+@Composable
+private fun MetroMenuItem(
+    iconGlyph: String,
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    iconColor: Color? = null,
+    textColor: Color? = null,
+) {
+    val scheme = LocalMetroScheme.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .metroClickable(targetScale = 0.96f, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = iconGlyph,
+            fontFamily = MetroFonts.icon,
+            fontSize = 15.sp,
+            color = iconColor ?: scheme.accent,
+        )
+        Text(
+            text = text,
+            fontFamily = MetroFonts.text,
+            fontSize = 13.sp,
+            color = textColor ?: scheme.text,
+        )
+    }
+}
+
+/** Пузырь сообщения: выделение текста (SelectionContainer), кнопка меню ⋯, ответы — markdown. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -861,6 +958,7 @@ private fun MessageBubble(
     onEdit: () -> Unit,
     canEdit: Boolean,
     onRetry: (() -> Unit)? = null,
+    showInlineRetry: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val scheme = LocalMetroScheme.current
@@ -899,8 +997,10 @@ private fun MessageBubble(
                                     .padding(horizontal = 6.dp, vertical = 3.dp),
                             ) {
                                 Text(
-                                    text = if (att.isImage) "🖼" else "📎",
+                                    text = if (att.isImage) "\uF03E" else "\uF15B",
+                                    fontFamily = MetroFonts.icon,
                                     fontSize = 11.sp,
+                                    color = scheme.accent,
                                     modifier = Modifier.padding(end = 4.dp),
                                 )
                                 Text(
@@ -913,21 +1013,29 @@ private fun MessageBubble(
                         }
                     }
                 }
-                if (msg.role == ChatMessage.Role.ASSISTANT) {
-                    MarkdownText(msg.text, scheme.text)
-                } else {
-                    Text(
-                        text = msg.text,
-                        fontFamily = MetroFonts.text,
-                        fontSize = 14.sp,
-                        color = if (msg.role == ChatMessage.Role.SYSTEM) scheme.textDim else scheme.text,
-                    )
+
+                // Выделение конкретного текста из сообщения и копирование через системный тулбар
+                SelectionContainer {
+                    if (msg.role == ChatMessage.Role.ASSISTANT) {
+                        MarkdownText(msg.text, scheme.text)
+                    } else {
+                        Text(
+                            text = msg.text,
+                            fontFamily = MetroFonts.text,
+                            fontSize = 14.sp,
+                            color = if (msg.role == ChatMessage.Role.SYSTEM) scheme.textDim else scheme.text,
+                        )
+                    }
                 }
-                if (onRetry != null && (msg.role == ChatMessage.Role.ASSISTANT || msg.role == ChatMessage.Role.SYSTEM)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
+
+                // Нижняя панель действий: повторить (только на конечном ответе агента) + кнопка меню ⋯
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (showInlineRetry && onRetry != null) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(MetroDimens.radiusSmall))
@@ -935,39 +1043,68 @@ private fun MessageBubble(
                                 .metroClickable(targetScale = 0.90f, onClick = onRetry)
                                 .padding(horizontal = 8.dp, vertical = 3.dp),
                         ) {
-                            Text(
-                                text = "⟳ повторить",
-                                fontFamily = MetroFonts.text,
-                                fontSize = 11.sp,
-                                color = scheme.textDim,
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = "\uF01E",
+                                    fontFamily = MetroFonts.icon,
+                                    fontSize = 11.sp,
+                                    color = scheme.textDim,
+                                )
+                                Text(
+                                    text = "повторить",
+                                    fontFamily = MetroFonts.text,
+                                    fontSize = 11.sp,
+                                    color = scheme.textDim,
+                                )
+                            }
                         }
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    // Кнопка ⋯ для открытия контекстного меню без сброса выделения текста
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                            .metroClickable(targetScale = 0.85f, onClick = onLongPress)
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = "\uF142",
+                            fontFamily = MetroFonts.icon,
+                            fontSize = 12.sp,
+                            color = scheme.textDim.copy(alpha = 0.65f),
+                        )
                     }
                 }
             }
         }
-        DropdownMenu(
+
+        MetroDropdownMenu(
             expanded = showMenu,
             onDismissRequest = onDismissMenu,
-            containerColor = scheme.glassDeep,
         ) {
-            DropdownMenuItem(
-                text = { Text("Копировать", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+            MetroMenuItem(
+                iconGlyph = "\uF0C5",
+                text = "Копировать всё",
                 onClick = onCopy,
-                colors = MenuDefaults.itemColors(textColor = scheme.text),
             )
             if (canEdit) {
-                DropdownMenuItem(
-                    text = { Text("Изменить и отправить заново", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                MetroMenuItem(
+                    iconGlyph = "\uF044",
+                    text = "Изменить и отправить заново",
                     onClick = onEdit,
-                    colors = MenuDefaults.itemColors(textColor = scheme.text),
                 )
             }
             if (onRetry != null) {
-                DropdownMenuItem(
-                    text = { Text("Повторить", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                MetroMenuItem(
+                    iconGlyph = "\uF01E",
+                    text = "Повторить ход",
                     onClick = onRetry,
-                    colors = MenuDefaults.itemColors(textColor = scheme.text),
                 )
             }
         }

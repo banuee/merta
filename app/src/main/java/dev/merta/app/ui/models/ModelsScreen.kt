@@ -111,7 +111,7 @@ fun ModelsScreen(
                         .background(scheme.accent),
                 )
             }
-            MetroSmallButton("⟳") { vm.refreshModels() }
+            MetroSmallButton("\uF01E") { vm.refreshModels() }
             Spacer(Modifier.width(8.dp))
             MetroSmallButton("×", onClick = onBack)
         }

@@ -128,7 +128,11 @@ fun SessionsScreen(vm: ChatViewModel, onOpenChat: () -> Unit, onNewChat: () -> U
 }
 
 @Composable
-fun MetroSmallButton(label: String, onClick: () -> Unit) {
+fun MetroSmallButton(
+    label: String,
+    fontFamily: androidx.compose.ui.text.font.FontFamily = if (label.any { it.code in 0xF000..0xF8FF }) MetroFonts.icon else MetroFonts.text,
+    onClick: () -> Unit,
+) {
     val scheme = LocalMetroScheme.current
     Box(
         contentAlignment = Alignment.Center,
@@ -139,6 +143,6 @@ fun MetroSmallButton(label: String, onClick: () -> Unit) {
             .metroClickable(targetScale = 0.88f, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        Text(label, fontSize = 18.sp, color = scheme.text)
+        Text(label, fontFamily = fontFamily, fontSize = 16.sp, color = scheme.text)
     }
 }

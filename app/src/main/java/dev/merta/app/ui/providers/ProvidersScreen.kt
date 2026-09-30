@@ -225,7 +225,7 @@ fun ProvidersScreen(
                             )
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            MetroSmallButton("✎") {
+                            MetroSmallButton("\uF044") {
                                 editingId = p.id
                                 editName = p.name
                                 editUrl = p.baseUrl

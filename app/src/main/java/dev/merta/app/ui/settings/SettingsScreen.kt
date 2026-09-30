@@ -545,7 +545,7 @@ private fun ShizukuRow(
         if (status == ShizukuOps.ShizukuStatus.NOT_AUTHORIZED) {
             MetroSmallButton("Разрешить", onClick = onRequest)
         } else {
-            MetroSmallButton("⟳", onClick = onRefresh)
+            MetroSmallButton("\uF01E", onClick = onRefresh)
         }
     }
 }
