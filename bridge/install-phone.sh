@@ -162,6 +162,37 @@ fix_killer() {
   fi
 }
 
+install_graphify() {
+  echo "Установка graphify в proot ($DISTRO)..."
+  proot-distro login "$DISTRO" -- bash -c "
+    if ! command -v python3 >/dev/null 2>&1; then
+      apt-get update && apt-get install -y python3 python3-pip || true
+    fi
+    if ! command -v pip3 >/dev/null 2>&1 && ! command -v pip >/dev/null 2>&1; then
+      apt-get update && apt-get install -y python3-pip || true
+    fi
+    pip3 install --break-system-packages graphifyy || pip install --break-system-packages graphifyy || uv tool install graphifyy || true
+  "
+  if proot-distro login "$DISTRO" -- command -v graphify >/dev/null 2>&1; then
+    echo "✓ Graphify успешно установлен в proot!"
+  else
+    echo "! Graphify не найден в PATH proot. Проверь вывод pip."
+  fi
+}
+
+restart_shizuku() {
+  local rish_bin=""
+  for c in "$HOME/rish" "$PREFIX/bin/rish"; do
+    [ -f "\$c" ] && { rish_bin="\$c"; break; }
+  done
+  echo "Попытка запуска/перезапуска Shizuku..."
+  if [ -n "\$rish_bin" ]; then
+    setsid timeout 10 "\$rish_bin" -c "sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh || am start -n moe.shizuku.privileged.api/.ui.MainActivity" </dev/null >/dev/null 2>&1 && echo "✓ Команда запуска Shizuku отправлена" || echo "! Не удалось перезапустить через rish"
+  else
+    am start -n moe.shizuku.privileged.api/.ui.MainActivity 2>/dev/null && echo "✓ Запущено приложение Shizuku" || echo "! Не удалось открыть Shizuku"
+  fi
+}
+
 start_watchdog() {
   if [ -f "\$WPIDF" ] && kill -0 "\$(cat "\$WPIDF" 2>/dev/null)" 2>/dev/null; then
     return 0
@@ -244,6 +275,12 @@ case "\$CMD" in
   fix-killer)
     fix_killer
     ;;
+  install-graphify)
+    install_graphify
+    ;;
+  restart-shizuku)
+    restart_shizuku
+    ;;
   start|"")
     start_daemon
     echo ""
@@ -252,7 +289,7 @@ case "\$CMD" in
     echo ""
     ;;
   *)
-    echo "Использование: merta [start|stop|restart|status|logs|fix-killer]"
+    echo "Использование: merta [start|stop|restart|status|logs|fix-killer|install-graphify|restart-shizuku]"
     exit 1
     ;;
 esac

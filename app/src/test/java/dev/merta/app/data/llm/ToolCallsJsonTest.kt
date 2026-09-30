@@ -42,8 +42,8 @@ class ToolCallsJsonTest {
 class ToolsDefTest {
 
     @Test
-    fun `nine tools with approval flags`() {
-        assertEquals(9, ToolDefs.ALL.size)
+    fun `ten tools with approval flags`() {
+        assertEquals(10, ToolDefs.ALL.size)
         assertNotNull(ToolDefs.byName("read_file"))
         assertEquals(false, ToolDefs.byName("read_file")!!.needsApproval)
         assertEquals(true, ToolDefs.byName("write_file")!!.needsApproval)
@@ -52,6 +52,7 @@ class ToolsDefTest {
         assertEquals(false, ToolDefs.byName("list_packages")!!.needsApproval)
         assertEquals(true, ToolDefs.byName("tap_screen")!!.needsApproval)
         assertEquals(true, ToolDefs.byName("swipe_screen")!!.needsApproval)
+        assertEquals(false, ToolDefs.byName("graphify")!!.needsApproval)
     }
 
     @Test

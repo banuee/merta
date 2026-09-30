@@ -31,7 +31,8 @@ object ModelsJson {
                 val name = SseParser.extractStringAfterKey(obj, "name", 0) ?: ""
                 val supported = reasoningSupported(obj)
                 val efforts = supportedEfforts(id, obj, supported)
-                out.add(LlmModel(id, name, promptPer1M(obj), completionPer1M(obj), supported, efforts))
+                val contextLength = extractNumber(obj, "context_length", 0)?.toLongOrNull() ?: 0L
+                out.add(LlmModel(id, name, promptPer1M(obj), completionPer1M(obj), supported, efforts, contextLength))
             }
             i = end
         }

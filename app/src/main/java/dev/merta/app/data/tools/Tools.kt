@@ -14,6 +14,7 @@ object ToolDefs {
     const val LIST_PACKAGES = "list_packages"
     const val TAP_SCREEN = "tap_screen"
     const val SWIPE_SCREEN = "swipe_screen"
+    const val GRAPHIFY = "graphify"
 
     data class Def(
         val name: String,
@@ -102,6 +103,20 @@ object ToolDefs {
             ),
             listOf("x1", "y1", "x2", "y2"),
             needsApproval = true,
+        ),
+        Def(
+            GRAPHIFY,
+            "Семантический граф знаний проекта (AST-граф классов, функций, связей и вызовов без расхода токенов). " +
+                "Действия: 'query' (поиск по графу с BFS), 'path' (кратчайший путь между узлами), 'explain' (объяснение концепта/файла), " +
+                "'update' (инкрементальное обновление графа изменённых файлов), 'build' (полная сборка графа проекта).",
+            listOf(
+                "action" to "query | path | explain | update | build",
+                "target" to "Вопрос для query, символ для explain, узел 1 для path, папка для build/update",
+                "target2" to "Узел 2 для path (необязательно)",
+                "workdir" to "Рабочая папка проекта (необязательно, по умолчанию текущая)",
+            ),
+            listOf("action"),
+            needsApproval = false,
         ),
     )
 

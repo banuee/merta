@@ -9,6 +9,7 @@ data class TurnMessage(
     val content: String = "",
     val toolCalls: List<OutToolCall> = emptyList(),
     val toolCallId: String? = null,
+    val attachments: List<dev.merta.app.ui.chat.Attachment> = emptyList(),
 )
 
 data class OutToolCall(val id: String, val name: String, val argumentsJson: String)

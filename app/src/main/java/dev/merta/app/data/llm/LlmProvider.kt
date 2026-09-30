@@ -24,6 +24,8 @@ data class LlmModel(
     val reasoningSupported: Boolean = true,
     /** Допустимые уровни reasoning effort для конкретной модели (пусто — дефолт/не поддерживается). */
     val supportedEfforts: List<String> = emptyList(),
+    /** Максимальный контекст модели в токенах (из context_length; 0 = неизвестно/эвристика). */
+    val contextLength: Long = 0L,
 ) {
     val displayName: String get() = name.ifBlank { id }
 }

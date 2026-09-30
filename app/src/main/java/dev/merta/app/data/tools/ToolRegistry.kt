@@ -52,6 +52,9 @@ class ToolRegistry(
                 ToolDefs.SWIPE_SCREEN -> swipeScreen(
                     call.args("x1"), call.args("y1"), call.args("x2"), call.args("y2"),
                 )
+                ToolDefs.GRAPHIFY -> runGraphify(
+                    call.args("action"), call.args("target"), call.args("target2"), call.args("workdir", defaultWorkdir),
+                )
                 else -> "error: неизвестный инструмент «${call.name}»"
             }
         } catch (e: Exception) {
@@ -275,6 +278,36 @@ class ToolRegistry(
         )
     }
 
+    private suspend fun runGraphify(
+        action: String,
+        target: String,
+        target2: String,
+        workdir: String,
+    ): String {
+        val act = action.trim().lowercase()
+        if (act.isBlank()) return "error: укажи action (query, path, explain, update, build)"
+        val dir = resolvePath(workdir).ifBlank { defaultWorkdir }
+        safError(dir)?.let { return it }
+        if (dir.isNotBlank()) {
+            gateway.check(dir, write = false)?.let { return "error: рабочая папка: $it" }
+        }
+        val targetArg = target.trim()
+        val target2Arg = target2.trim()
+        val cmd = when (act) {
+            "query" -> "graphify query ${shQuote(targetArg)}"
+            "path" -> "graphify path ${shQuote(targetArg)} ${shQuote(target2Arg)}"
+            "explain" -> "graphify explain ${shQuote(targetArg)}"
+            "update" -> "graphify ${shQuote(dir.ifBlank { "." })} --update"
+            "build" -> "graphify ${shQuote(dir.ifBlank { "." })}"
+            else -> "graphify $act ${shQuote(targetArg)}"
+        }
+        val res = runCommand(cmd, dir)
+        if (res.contains("not found: graphify") || res.contains("command not found") || res.contains("[exit 127]")) {
+            return "error: graphify не установлен в системе/Termux. Установи командой 'merta install-graphify' в Termux или pip install graphifyy."
+        }
+        return res
+    }
+
     companion object {
         const val MAX_READ = 100 * 1024L
         const val MAX_LIST = 300
@@ -294,6 +327,7 @@ class ToolRegistry(
             ToolDefs.LIST_PACKAGES -> "Пакеты: ${(call.arguments["filter"] ?: "").ifBlank { "все" }}"
             ToolDefs.TAP_SCREEN -> "Тап ${call.arguments["x"].orEmpty()},${call.arguments["y"].orEmpty()}"
             ToolDefs.SWIPE_SCREEN -> "Свайп ${call.arguments["x1"].orEmpty()},${call.arguments["y1"].orEmpty()} → ${call.arguments["x2"].orEmpty()},${call.arguments["y2"].orEmpty()}"
+            ToolDefs.GRAPHIFY -> "Graphify ${(call.arguments["action"] ?: "").uppercase()}: ${(call.arguments["target"] ?: "").take(50)}"
             else -> call.name
         }
 
@@ -303,6 +337,7 @@ class ToolRegistry(
             ToolDefs.INSTALL_APK -> "apk: ${(call.arguments["path"] ?: "")}"
             ToolDefs.TAP_SCREEN -> "x=${call.arguments["x"]}, y=${call.arguments["y"]}"
             ToolDefs.SWIPE_SCREEN -> "от ${call.arguments["x1"]},${call.arguments["y1"]}"
+            ToolDefs.GRAPHIFY -> "action: ${call.arguments["action"] ?: ""}, target: ${call.arguments["target"] ?: ""}"
             else -> ""
         }
 

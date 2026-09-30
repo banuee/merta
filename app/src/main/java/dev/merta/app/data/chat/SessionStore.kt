@@ -1,5 +1,6 @@
 package dev.merta.app.data.chat
 
+import dev.merta.app.ui.chat.Attachment
 import dev.merta.app.ui.chat.ChatMessage
 import dev.merta.app.ui.chat.ThoughtData
 import java.io.File
@@ -65,11 +66,28 @@ class SessionStore(private val chatsDir: File) {
                 } else {
                     null
                 }
+                val attArr = o.optJSONArray("attachments")
+                val attachments = if (attArr != null && attArr.length() > 0) {
+                    List(attArr.length()) { j ->
+                        val ao = attArr.getJSONObject(j)
+                        Attachment(
+                            uri = ao.optString("uri", ""),
+                            name = ao.optString("name", ""),
+                            mimeType = ao.optString("mimeType", ""),
+                            sizeBytes = ao.optLong("sizeBytes", 0L),
+                            base64Data = ao.optString("base64Data", "").ifBlank { null },
+                            localPath = ao.optString("localPath", "").ifBlank { null },
+                        )
+                    }
+                } else {
+                    emptyList()
+                }
                 ChatMessage(
                     id = o.optLong("id", i.toLong()),
                     role = role,
                     text = o.optString("text", ""),
                     thought = thought,
+                    attachments = attachments,
                 )
             }
         } catch (_: Exception) {
@@ -121,6 +139,22 @@ class SessionStore(private val chatsDir: File) {
                 if (m.role == ChatMessage.Role.THINKING) {
                     o.put("thinkMs", m.thought?.lastMs ?: -1L)
                     o.put("reasoning", m.thought?.reasoning ?: "")
+                }
+                if (m.attachments.isNotEmpty()) {
+                    val attArr = JSONArray()
+                    for (att in m.attachments) {
+                        val ao = JSONObject()
+                            .put("uri", att.uri)
+                            .put("name", att.name)
+                            .put("mimeType", att.mimeType)
+                            .put("sizeBytes", att.sizeBytes)
+                        if (!att.localPath.isNullOrBlank()) ao.put("localPath", att.localPath)
+                        if (!att.base64Data.isNullOrBlank() && att.base64Data.length < 500_000) {
+                            ao.put("base64Data", att.base64Data)
+                        }
+                        attArr.put(ao)
+                    }
+                    o.put("attachments", attArr)
                 }
                 arr.put(o)
             }

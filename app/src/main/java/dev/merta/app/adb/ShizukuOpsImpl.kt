@@ -52,6 +52,22 @@ class ShizukuOpsImpl(context: Context) : ShizukuOps {
         Shizuku.removeRequestPermissionResultListener(l)
     }
 
+    fun addBinderReceivedListener(l: Shizuku.OnBinderReceivedListener) {
+        try { Shizuku.addBinderReceivedListenerSticky(l) } catch (_: Exception) {}
+    }
+
+    fun removeBinderReceivedListener(l: Shizuku.OnBinderReceivedListener) {
+        try { Shizuku.removeBinderReceivedListener(l) } catch (_: Exception) {}
+    }
+
+    fun addBinderDeadListener(l: Shizuku.OnBinderDeadListener) {
+        try { Shizuku.addBinderDeadListener(l) } catch (_: Exception) {}
+    }
+
+    fun removeBinderDeadListener(l: Shizuku.OnBinderDeadListener) {
+        try { Shizuku.removeBinderDeadListener(l) } catch (_: Exception) {}
+    }
+
     override suspend fun run(
         command: ShizukuCommand,
         args: Map<String, String>,

@@ -351,6 +351,38 @@ class OpenAiCompatClient(
                         .append(SseParser.jsonEscape(tc.argumentsJson)).append("\"}}")
                 }
                 sb.append(']')
+            } else if (m.attachments.isNotEmpty()) {
+                sb.append(",\"content\":[")
+                var partIdx = 0
+                if (m.content.isNotBlank()) {
+                    sb.append("{\"type\":\"text\",\"text\":\"").append(SseParser.jsonEscape(m.content)).append("\"}")
+                    partIdx++
+                }
+                for (att in m.attachments) {
+                    if (att.isImage) {
+                        val b64 = att.base64Data ?: try {
+                            att.localPath?.let { java.io.File(it).takeIf { f -> f.exists() }?.readBytes()?.let { b ->
+                                android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP)
+                            } }
+                        } catch (_: Exception) { null }
+                        if (b64 != null) {
+                            if (partIdx > 0) sb.append(',')
+                            sb.append("{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:")
+                                .append(att.mimeType).append(";base64,").append(b64).append("\"}}")
+                            partIdx++
+                        }
+                    } else {
+                        if (partIdx > 0) sb.append(',')
+                        sb.append("{\"type\":\"text\",\"text\":\"[Прикреплён файл: ")
+                            .append(SseParser.jsonEscape(att.name)).append(" (").append(att.mimeType).append(')')
+                        if (!att.localPath.isNullOrBlank()) {
+                            sb.append(", путь: ").append(SseParser.jsonEscape(att.localPath))
+                        }
+                        sb.append("]\"}")
+                        partIdx++
+                    }
+                }
+                sb.append(']')
             } else {
                 sb.append(",\"content\":\"").append(SseParser.jsonEscape(m.content)).append('"')
                 if (m.role == "tool" && m.toolCallId != null) {

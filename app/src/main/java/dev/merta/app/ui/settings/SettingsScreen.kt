@@ -359,6 +359,18 @@ fun SettingsScreen(
             onRequest = onRequestShizuku,
         )
 
+        Spacer(Modifier.height(10.dp))
+        GraphifySection(
+            workspaceRoot = ws?.allowedRoots?.firstOrNull(),
+            settings = settings,
+        )
+
+        Spacer(Modifier.height(10.dp))
+        SkillsMcpSection(
+            agentFiles = agentFiles,
+            settings = settings,
+        )
+
         Spacer(Modifier.height(16.dp))
         SectionLabel("РАБОЧАЯ ПАПКА")
         val roots = ws?.allowedRoots ?: emptyList()
@@ -590,3 +602,227 @@ private fun MetroField(
         )
     }
 }
+
+@Composable
+private fun GraphifySection(
+    workspaceRoot: String?,
+    settings: MertaSettings,
+) {
+    val scheme = LocalMetroScheme.current
+    val scope = rememberCoroutineScope()
+    var statusText by remember { mutableStateOf<String?>(null) }
+    var isRunning by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(MetroDimens.radius))
+            .background(scheme.glass)
+            .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radius))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "GRAPHIFY",
+                fontFamily = MetroFonts.headline,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = scheme.accent,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "AST-граф",
+                fontFamily = MetroFonts.text,
+                fontSize = 11.sp,
+                color = scheme.textDim,
+            )
+        }
+        Text(
+            text = "Контекстный граф проекта для агента: query, path, explain, update. Позволяет агенту мгновенно исследовать архитектуру без расхода токенов LLM.",
+            fontFamily = MetroFonts.text,
+            fontSize = 12.sp,
+            color = scheme.textDim,
+        )
+        Text(
+            text = "Установка в Termux: ~/bin/merta install-graphify",
+            fontFamily = MetroFonts.text,
+            fontSize = 11.sp,
+            color = scheme.textDim,
+        )
+        if (statusText != null) {
+            Text(
+                text = statusText!!,
+                fontFamily = MetroFonts.text,
+                fontSize = 12.sp,
+                color = if (statusText!!.startsWith("Ошибка")) scheme.red else scheme.text,
+            )
+        }
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                .background(if (isRunning) scheme.glassHover else scheme.accent.copy(alpha = 0.22f))
+                .border(1.dp, scheme.accent.copy(alpha = 0.5f), RoundedCornerShape(MetroDimens.radiusSmall))
+                .metroClickable(targetScale = 0.96f) {
+                    if (isRunning) return@metroClickable
+                    if (workspaceRoot.isNullOrBlank()) {
+                        statusText = "Сначала добавь рабочую папку в настройках ниже."
+                        return@metroClickable
+                    }
+                    val agy = settings.loadProviders().find { it.isAgy }
+                    if (agy == null) {
+                        statusText = "Провайдер Agy не настроен (нужен для запуска в Termux)."
+                        return@metroClickable
+                    }
+                    isRunning = true
+                    statusText = "Индексация кодовой базы через Graphify…"
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            val client = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl, token = agy.apiKey)
+                            val res = client.shell("graphify \"$workspaceRoot\"", timeoutS = 90)
+                            statusText = if (res.code == 0) {
+                                "Граф успешно построен!"
+                            } else {
+                                "Завершено (код ${res.code}): ${res.output.take(120)}"
+                            }
+                        } catch (e: Exception) {
+                            statusText = "Ошибка: ${e.message?.take(100)}"
+                        } finally {
+                            isRunning = false
+                        }
+                    }
+                }
+                .padding(vertical = 10.dp),
+        ) {
+            Text(
+                text = if (isRunning) "ИНДЕКСАЦИЯ…" else "ПОСТРОИТЬ / ОБНОВИТЬ ГРАФ",
+                fontFamily = MetroFonts.text,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                letterSpacing = 1.sp,
+                color = scheme.text,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SkillsMcpSection(
+    agentFiles: AgentFiles,
+    settings: MertaSettings,
+) {
+    val scheme = LocalMetroScheme.current
+    var skillsTick by remember { mutableStateOf(0) }
+    val skills = remember(skillsTick) { agentFiles.listSkills() }
+    val mcpServers = remember(skillsTick) { agentFiles.listMcpServers() }
+    val disabledSkills = remember(skillsTick) { settings.loadDisabledSkills() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(MetroDimens.radius))
+            .background(scheme.glass)
+            .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radius))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "НАВЫКИ И MCP",
+                fontFamily = MetroFonts.headline,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = scheme.text,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "skills: ${skills.size} · mcp: ${mcpServers.size}",
+                fontFamily = MetroFonts.text,
+                fontSize = 11.sp,
+                color = scheme.textDim,
+            )
+        }
+
+        if (skills.isEmpty()) {
+            Text(
+                text = "Навыки не установлены. Добавь папку со SKILL.md в files/merta/skills/<name>/",
+                fontFamily = MetroFonts.text,
+                fontSize = 12.sp,
+                color = scheme.textDim,
+            )
+        } else {
+            for (skill in skills) {
+                val isEnabled = !disabledSkills.contains(skill.dirName)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(if (isEnabled) scheme.glassHover else scheme.glass)
+                        .border(
+                            1.dp,
+                            if (isEnabled) scheme.accent.copy(alpha = 0.4f) else scheme.stroke,
+                            RoundedCornerShape(MetroDimens.radiusSmall),
+                        )
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = skill.name,
+                            fontFamily = MetroFonts.text,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = scheme.text,
+                        )
+                        if (skill.description.isNotBlank()) {
+                            Text(
+                                text = skill.description,
+                                fontFamily = MetroFonts.text,
+                                fontSize = 11.sp,
+                                color = scheme.textDim,
+                                maxLines = 2,
+                            )
+                        }
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                            .background(if (isEnabled) scheme.accent.copy(alpha = 0.22f) else scheme.glass)
+                            .border(
+                                1.dp,
+                                if (isEnabled) scheme.accent else scheme.stroke,
+                                RoundedCornerShape(MetroDimens.radiusSmall),
+                            )
+                            .metroClickable(targetScale = 0.92f) {
+                                settings.setSkillEnabled(skill.dirName, !isEnabled)
+                                skillsTick++
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = if (isEnabled) "ВКЛ" else "ВЫКЛ",
+                            fontFamily = MetroFonts.text,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isEnabled) scheme.accent else scheme.textDim,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (mcpServers.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "MCP-серверы: " + mcpServers.joinToString(),
+                fontFamily = MetroFonts.text,
+                fontSize = 12.sp,
+                color = scheme.textDim,
+            )
+        }
+    }
+}
+

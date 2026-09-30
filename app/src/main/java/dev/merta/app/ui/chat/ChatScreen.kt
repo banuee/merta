@@ -1,6 +1,9 @@
 package dev.merta.app.ui.chat
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -25,6 +28,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -88,6 +93,20 @@ fun ChatScreen(
     val clip = LocalClipboardManager.current
     var drawer by remember { mutableStateOf<Drawer?>(null) }
     var dragTotal by remember { mutableStateOf(0f) }
+    var showContextDialog by remember { mutableStateOf(false) }
+    val pendingAtts by vm.pendingAttachments.collectAsState()
+
+    val mediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 5),
+    ) { uris ->
+        if (uris.isNotEmpty()) vm.addAttachments(uris)
+    }
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) vm.addAttachments(uris)
+    }
+
     // Сторона для анимации закрытия: на выходе drawer уже null.
     var lastSide by remember { mutableStateOf(Drawer.RIGHT) }
     if (drawer != null) lastSide = drawer!!
@@ -105,6 +124,15 @@ fun ChatScreen(
 
     BackHandler(enabled = drawer != null) {
         drawer = null
+    }
+
+    if (showContextDialog) {
+        ContextUsageDialog(
+            percent = ui.contextPercent,
+            totalTokens = vm.usageState.collectAsState().value.total(),
+            limitTokens = vm.contextLimitForCurrent(),
+            onDismiss = { showContextDialog = false },
+        )
     }
 
     if (editing != null) {
@@ -278,6 +306,24 @@ fun ChatScreen(
                     color = if (ui.autoApprove) scheme.red else scheme.textDim,
                 )
             }
+            if (ui.contextPercent >= 75) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                        .background(scheme.red.copy(alpha = 0.22f))
+                        .border(1.dp, scheme.red, RoundedCornerShape(MetroDimens.radiusSmall))
+                        .metroClickable(targetScale = 0.93f) { showContextDialog = true }
+                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                ) {
+                    Text(
+                        text = "⚠ ${ui.contextPercent}%",
+                        fontFamily = MetroFonts.text,
+                        fontSize = 13.sp,
+                        color = scheme.red,
+                    )
+                }
+            }
         }
 
         // Баннер демона: мёртв — красная карточка с действиями, жив — тихая сводка.
@@ -294,6 +340,13 @@ fun ChatScreen(
                 fontSize = 11.sp,
                 color = scheme.textDim,
                 modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+
+        if (ui.shizukuWarning) {
+            ShizukuDownBanner(
+                onRestart = { vm.restartShizuku() },
+                onCheck = { vm.refreshShizuku() },
             )
         }
 
@@ -319,6 +372,7 @@ fun ChatScreen(
                 if (msg.role == ChatMessage.Role.THINKING && thought != null) {
                     ThoughtRow(thought, Modifier.animateItem())
                 } else {
+                    val isLastUser = msg.id == ui.messages.lastOrNull { it.role == ChatMessage.Role.USER }?.id
                     MessageBubble(
                         msg = msg,
                         showMenu = menuFor == msg.id,
@@ -333,6 +387,12 @@ fun ChatScreen(
                             editText = msg.text
                             editing = msg
                         },
+                        onRetry = if (!isWorking && (msg.role == ChatMessage.Role.ASSISTANT || msg.role == ChatMessage.Role.SYSTEM || isLastUser)) {
+                            {
+                                menuFor = null
+                                vm.retryFromMessage(msg.id)
+                            }
+                        } else null,
                         canEdit = msg.role == ChatMessage.Role.USER && !ui.sending,
                         modifier = Modifier.animateItem(),
                     )
@@ -353,10 +413,112 @@ fun ChatScreen(
             }
         }
 
+        if (pendingAtts.isNotEmpty()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                if (!vm.modelSupportsVision() && pendingAtts.any { it.isImage }) {
+                    Text(
+                        text = "⚠ Модель может не поддерживать изображения",
+                        fontFamily = MetroFonts.text,
+                        fontSize = 11.sp,
+                        color = scheme.red,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    items(pendingAtts.size) { idx ->
+                        val att = pendingAtts[idx]
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                                .background(scheme.glass)
+                                .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = if (att.isImage) "🖼" else "📎",
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(end = 4.dp),
+                            )
+                            Text(
+                                text = att.name.take(18) + (if (att.name.length > 18) "…" else ""),
+                                fontFamily = MetroFonts.text,
+                                fontSize = 12.sp,
+                                color = scheme.text,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "×",
+                                fontFamily = MetroFonts.headline,
+                                fontSize = 14.sp,
+                                color = scheme.textDim,
+                                modifier = Modifier
+                                    .metroClickable(targetScale = 0.85f) { vm.removePendingAttachment(idx) }
+                                    .padding(horizontal = 2.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(vertical = 10.dp),
         ) {
+            var showAttachMenu by remember { mutableStateOf(false) }
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                    .background(if (pendingAtts.isNotEmpty()) scheme.accent.copy(alpha = 0.22f) else scheme.glass)
+                    .border(
+                        1.dp,
+                        if (pendingAtts.isNotEmpty()) scheme.accent else scheme.stroke,
+                        RoundedCornerShape(MetroDimens.radiusSmall),
+                    )
+                    .metroClickable(targetScale = 0.92f) {
+                        showAttachMenu = true
+                    }
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+            ) {
+                Text(
+                    text = "📎",
+                    fontSize = 15.sp,
+                    color = if (pendingAtts.isNotEmpty()) scheme.accent else scheme.textDim,
+                )
+                DropdownMenu(
+                    expanded = showAttachMenu,
+                    onDismissRequest = { showAttachMenu = false },
+                    containerColor = scheme.glassDeep,
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Фото и видео", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                        onClick = {
+                            showAttachMenu = false
+                            try {
+                                mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                            } catch (_: Exception) {
+                                filePicker.launch(arrayOf("image/*", "video/*"))
+                            }
+                        },
+                        colors = MenuDefaults.itemColors(textColor = scheme.text),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Любой файл", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                        onClick = {
+                            showAttachMenu = false
+                            filePicker.launch(arrayOf("*/*"))
+                        },
+                        colors = MenuDefaults.itemColors(textColor = scheme.text),
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -698,6 +860,7 @@ private fun MessageBubble(
     onCopy: () -> Unit,
     onEdit: () -> Unit,
     canEdit: Boolean,
+    onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scheme = LocalMetroScheme.current
@@ -720,15 +883,67 @@ private fun MessageBubble(
                 .combinedClickable(onClick = {}, onLongClick = onLongPress)
                 .padding(10.dp),
         ) {
-            if (msg.role == ChatMessage.Role.ASSISTANT) {
-                MarkdownText(msg.text, scheme.text)
-            } else {
-                Text(
-                    text = msg.text,
-                    fontFamily = MetroFonts.text,
-                    fontSize = 14.sp,
-                    color = if (msg.role == ChatMessage.Role.SYSTEM) scheme.textDim else scheme.text,
-                )
+            Column {
+                if (msg.attachments.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    ) {
+                        for (att in msg.attachments) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                                    .background(scheme.glassHover)
+                                    .border(1.dp, scheme.stroke, RoundedCornerShape(MetroDimens.radiusSmall))
+                                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                            ) {
+                                Text(
+                                    text = if (att.isImage) "🖼" else "📎",
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(end = 4.dp),
+                                )
+                                Text(
+                                    text = att.name.take(24),
+                                    fontFamily = MetroFonts.text,
+                                    fontSize = 11.sp,
+                                    color = scheme.textDim,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (msg.role == ChatMessage.Role.ASSISTANT) {
+                    MarkdownText(msg.text, scheme.text)
+                } else {
+                    Text(
+                        text = msg.text,
+                        fontFamily = MetroFonts.text,
+                        fontSize = 14.sp,
+                        color = if (msg.role == ChatMessage.Role.SYSTEM) scheme.textDim else scheme.text,
+                    )
+                }
+                if (onRetry != null && (msg.role == ChatMessage.Role.ASSISTANT || msg.role == ChatMessage.Role.SYSTEM)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                                .background(scheme.glassHover)
+                                .metroClickable(targetScale = 0.90f, onClick = onRetry)
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                        ) {
+                            Text(
+                                text = "⟳ повторить",
+                                fontFamily = MetroFonts.text,
+                                fontSize = 11.sp,
+                                color = scheme.textDim,
+                            )
+                        }
+                    }
+                }
             }
         }
         DropdownMenu(
@@ -745,6 +960,13 @@ private fun MessageBubble(
                 DropdownMenuItem(
                     text = { Text("Изменить и отправить заново", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
                     onClick = onEdit,
+                    colors = MenuDefaults.itemColors(textColor = scheme.text),
+                )
+            }
+            if (onRetry != null) {
+                DropdownMenuItem(
+                    text = { Text("Повторить", fontFamily = MetroFonts.text, fontSize = 14.sp, color = scheme.text) },
+                    onClick = onRetry,
                     colors = MenuDefaults.itemColors(textColor = scheme.text),
                 )
             }
@@ -869,6 +1091,102 @@ private fun ApproveDialog(toolName: String, summary: String, preview: String, on
                     Text("Разрешить", fontFamily = MetroFonts.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
                 }
             }
+        }
+    }
+}
+
+/** Диалог подробной информации о расходе контекста модели. */
+@Composable
+private fun ContextUsageDialog(
+    percent: Int,
+    totalTokens: Long,
+    limitTokens: Long,
+    onDismiss: () -> Unit,
+) {
+    val scheme = LocalMetroScheme.current
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(MetroDimens.panelRadius))
+                .background(scheme.glassDeep)
+                .border(1.dp, scheme.strokeStrong, RoundedCornerShape(MetroDimens.panelRadius))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("КОНТЕКСТ МОДЕЛИ", fontFamily = MetroFonts.text, fontSize = 12.sp, letterSpacing = 1.5.sp, color = scheme.textDim)
+            Text(
+                text = "Заполнено: $percent%",
+                fontFamily = MetroFonts.headline,
+                fontSize = 20.sp,
+                color = if (percent >= 85) scheme.red else scheme.text,
+            )
+            Text(
+                text = "Использовано ~$totalTokens из ${if (limitTokens > 0) limitTokens else "—"} токенов окна контекста.",
+                fontFamily = MetroFonts.text,
+                fontSize = 13.sp,
+                color = scheme.textDim,
+            )
+            if (percent >= 80) {
+                Text(
+                    text = "Контекст почти полон. Рекомендуется начать новый чат или удалить старые длинные сообщения, чтобы избежать обрезки ответов или ошибок провайдера.",
+                    fontFamily = MetroFonts.text,
+                    fontSize = 12.sp,
+                    color = scheme.red,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+                    .background(scheme.accent.copy(alpha = 0.85f))
+                    .metroClickable(targetScale = 0.97f, onClick = onDismiss)
+                    .padding(vertical = 11.dp),
+            ) {
+                Text("Понятно", fontFamily = MetroFonts.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+            }
+        }
+    }
+}
+
+/** Баннер упавшего Shizuku: перезапуск / проверить снова. */
+@Composable
+private fun ShizukuDownBanner(onRestart: () -> Unit, onCheck: () -> Unit) {
+    val scheme = LocalMetroScheme.current
+    var restarting by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(MetroDimens.radiusSmall))
+            .background(scheme.red.copy(alpha = 0.16f))
+            .border(1.dp, scheme.red.copy(alpha = 0.6f), RoundedCornerShape(MetroDimens.radiusSmall))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+    ) {
+        Text(
+            text = "Shizuku не отвечает или служба была остановлена.",
+            fontFamily = MetroFonts.text,
+            fontSize = 13.sp,
+            color = scheme.text,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "Системные команды через rish могут быть временно недоступны.",
+            fontFamily = MetroFonts.text,
+            fontSize = 12.sp,
+            color = scheme.textDim,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DaemonBtn(
+                label = if (restarting) "перезапуск…" else "перезапустить",
+                onClick = {
+                    restarting = true
+                    onRestart()
+                },
+            )
+            DaemonBtn("проверить", onClick = onCheck)
         }
     }
 }

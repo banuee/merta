@@ -385,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
                             "output": (p.stdout + p.stderr)[-20000:]})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)}, 500)
+        elif self.path == "/shizuku":
+            self._json({"ok": rish_probe(), "rish": bool(RISH)})
         else:
             self._json({"ok": False, "error": "unknown endpoint"}, 404)
 
@@ -438,6 +440,11 @@ class Handler(BaseHTTPRequestHandler):
             log("shell: %.120s" % cmd)
             rc, out = run_rish(cmd, body.get("timeout_s") or 60)
             self._json({"ok": rc == 0, "code": rc, "output": out[-20000:]})
+        elif self.path == "/shizuku/restart":
+            if not self._need_token():
+                return
+            rc, out = run_rish("sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh || am start -n moe.shizuku.privileged.api/.ui.MainActivity", timeout=15)
+            self._json({"ok": rc == 0, "code": rc, "output": out})
         elif self.path == "/stop":
             if not self._need_token():
                 return

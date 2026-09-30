@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.merta.app.data.agent.AgentFiles
@@ -67,6 +68,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val daemonDown: Boolean = false,
         /** Короткая сводка демона (версия agy, патч, rish). */
         val daemonNote: String = "",
+        /** Процент расхода контекста текущей модели (0-100%). Предупреждение при >= 75%. */
+        val contextPercent: Int = 0,
+        /** Shizuku отключён / упал (контекстная плашка для быстрого перезапуска). */
+        val shizukuWarning: Boolean = false,
     )
 
     private val settings = MertaSettings(app)
@@ -139,15 +144,60 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val quotaError = MutableStateFlow<String?>(null)
     private val quotaFetching = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** Статус Shizuku для настроек (обновляется по запросу). */
+    /** Статус Shizuku для настроек (обновляется по запросу и фоновым поллером). */
     val shizukuStatus = MutableStateFlow(dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING)
+
+    private val shizukuReceivedListener = rikka.shizuku.Shizuku.OnBinderReceivedListener {
+        refreshShizuku()
+        _state.update { it.copy(shizukuWarning = false) }
+    }
+
+    private val shizukuDeadListener = rikka.shizuku.Shizuku.OnBinderDeadListener {
+        shizukuStatus.value = dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING
+        _state.update { it.copy(shizukuWarning = true) }
+    }
 
     fun refreshShizuku() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                shizukuStatus.value = dev.merta.app.adb.ShizukuOpsImpl(getApplication()).status()
+                val st = dev.merta.app.adb.ShizukuOpsImpl(getApplication()).status()
+                shizukuStatus.value = st
+                val wasReady = _state.value.shizukuWarning || st == dev.merta.app.adb.ShizukuOps.ShizukuStatus.READY
+                _state.update { it.copy(shizukuWarning = st == dev.merta.app.adb.ShizukuOps.ShizukuStatus.NOT_RUNNING && wasReady) }
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /** Перезапуск Shizuku: через Termux мост / start.sh или запуск приложения Shizuku. */
+    fun restartShizuku() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val agy = settings.loadProviders().find { it.isAgy }
+            var ok = false
+            if (agy != null && daemonState.value.alive) {
+                try {
+                    val client = dev.merta.app.bridge.AgyDaemonClient(agy.baseUrl, token = agy.apiKey)
+                    val r = client.shell(
+                        "sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh || am start -n moe.shizuku.privileged.api/.ui.MainActivity",
+                        timeoutS = 15,
+                    )
+                    ok = r.code == 0
+                } catch (_: Exception) {
+                }
+            }
+            if (!ok) {
+                try {
+                    val ctx = getApplication<Application>()
+                    val intent = ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            kotlinx.coroutines.delay(2500)
+            refreshShizuku()
         }
     }
 
@@ -159,6 +209,82 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             dev.merta.app.adb.ShizukuOpsImpl(getApplication()).requestPermission(SHIZUKU_PERM_CODE)
         } catch (_: Exception) {
         }
+    }
+
+    /** Выбранные вложения перед отправкой сообщения. */
+    val pendingAttachments = MutableStateFlow<List<Attachment>>(emptyList())
+
+    fun addAttachments(uris: List<Uri>) {
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = mutableListOf<Attachment>()
+            val attDir = java.io.File(context.cacheDir, "attachments").apply { mkdirs() }
+            for (uri in uris) {
+                try {
+                    var name = "file_${System.currentTimeMillis()}"
+                    var size = 0L
+                    var mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (cursor.moveToFirst()) {
+                            if (nameIndex >= 0) name = cursor.getString(nameIndex) ?: name
+                            if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
+                        }
+                    }
+                    val cleanName = name.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                    val localFile = java.io.File(attDir, "${System.currentTimeMillis()}_$cleanName")
+                    context.contentResolver.openInputStream(uri)?.use { inp ->
+                        localFile.outputStream().use { out -> inp.copyTo(out) }
+                    }
+                    if (size == 0L) size = localFile.length()
+                    val isImg = mime.startsWith("image/")
+                    val base64 = if (isImg && size < 4 * 1024 * 1024L) {
+                        try {
+                            val bytes = localFile.readBytes()
+                            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                        } catch (_: Exception) { null }
+                    } else null
+                    list.add(
+                        Attachment(
+                            uri = uri.toString(),
+                            name = name,
+                            mimeType = mime,
+                            sizeBytes = size,
+                            base64Data = base64,
+                            localPath = localFile.absolutePath,
+                        )
+                    )
+                } catch (_: Exception) {
+                }
+            }
+            if (list.isNotEmpty()) {
+                pendingAttachments.update { it + list }
+            }
+        }
+    }
+
+    fun removePendingAttachment(index: Int) {
+        pendingAttachments.update {
+            if (index in it.indices) it.toMutableList().apply { removeAt(index) } else it
+        }
+    }
+
+    fun clearPendingAttachments() {
+        pendingAttachments.value = emptyList()
+    }
+
+    fun modelSupportsVision(): Boolean {
+        val p = settings.activeProvider() ?: return true
+        val m = settings.selectedModel(p.id).lowercase()
+        if (m.isBlank()) return true
+        if (p.isAgy) {
+            return m.contains("gemini") || m.contains("claude") || m.contains("gpt-4") || m.contains("vision")
+        }
+        return m.contains("gemini") || m.contains("gpt-4o") || m.contains("gpt-4.5") ||
+            m.contains("o1") || m.contains("o3") || m.contains("claude-3") ||
+            m.contains("vision") || m.contains("-vl") || m.contains("pixtral") ||
+            m.contains("minicpm") || m.contains("llava")
     }
 
     /** Ответ пользователя в диалоге подтверждения инструмента. */
@@ -218,8 +344,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Проверка демона при входе: патч-слет → автопатч, демона нет → баннер.
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                dev.merta.app.adb.ShizukuOpsImpl(getApplication()).addPermissionListener(shizukuPermListener)
+                val ops = dev.merta.app.adb.ShizukuOpsImpl(getApplication())
+                ops.addPermissionListener(shizukuPermListener)
+                ops.addBinderReceivedListener(shizukuReceivedListener)
+                ops.addBinderDeadListener(shizukuDeadListener)
             } catch (_: Exception) {
+            }
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                refreshShizuku()
+                kotlinx.coroutines.delay(20000)
             }
         }
         recheckDaemon()
@@ -567,14 +702,84 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- отправка ----------
 
     /** true — ход запущен; false — отказ (текст ввода не трогаем). */
-    fun send(text: String): Boolean {
+    /** true — ход запущен; false — отказ (текст ввода не трогаем). */
+    fun send(text: String, attachments: List<Attachment> = pendingAttachments.value): Boolean {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _state.value.sending) return false
+        val atts = attachments.toList()
+        if ((trimmed.isEmpty() && atts.isEmpty()) || _state.value.sending) return false
         if (!checkConfigured()) return false
         cancelStream(keepPartial = false)
-        push(ChatMessage(nextId(), ChatMessage.Role.USER, trimmed))
+        clearPendingAttachments()
+        val displayText = trimmed.ifBlank {
+            if (atts.size == 1) "Вложение: ${atts.first().name}" else "Вложения: ${atts.size} файлов"
+        }
+        push(ChatMessage(nextId(), ChatMessage.Role.USER, displayText, attachments = atts))
         startTurn()
         return true
+    }
+
+    /** Повторить последний ход (перегенерация ответа модели или повтор после ошибки). */
+    fun retryLastTurn() {
+        if (_state.value.sending) return
+        val msgs = _state.value.messages
+        val lastUserIdx = msgs.indexOfLast { it.role == ChatMessage.Role.USER }
+        if (lastUserIdx < 0) return
+        cancelStream(keepPartial = false)
+        val kept = msgs.take(lastUserIdx + 1).toMutableList()
+        _state.update { it.copy(messages = kept, streaming = null) }
+        agyConversations.remove(_state.value.sessionId)
+        startTurn()
+    }
+
+    /** Повторить от конкретного сообщения (для меню действий на пузырях). */
+    fun retryFromMessage(id: Long) {
+        if (_state.value.sending) return
+        val msgs = _state.value.messages
+        val idx = msgs.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        cancelStream(keepPartial = false)
+        val targetUserIdx = if (msgs[idx].role == ChatMessage.Role.USER) {
+            idx
+        } else {
+            msgs.take(idx).indexOfLast { it.role == ChatMessage.Role.USER }
+        }
+        if (targetUserIdx >= 0) {
+            val kept = msgs.take(targetUserIdx + 1).toMutableList()
+            _state.update { it.copy(messages = kept, streaming = null) }
+            agyConversations.remove(_state.value.sessionId)
+            startTurn()
+        }
+    }
+
+    fun canRetry(): Boolean {
+        val s = _state.value
+        return !s.sending && s.messages.any { it.role == ChatMessage.Role.USER }
+    }
+
+    /** Лимит контекста текущей модели в токенах. */
+    fun contextLimitForCurrent(): Long {
+        val p = settings.activeProvider() ?: return 128_000L
+        val mId = settings.selectedModel(p.id)
+        val mObj = _state.value.groups.find { it.provider.id == p.id }?.models?.find { it.id == mId }
+        if (mObj != null && mObj.contextLength > 0L) return mObj.contextLength
+        val lower = mId.lowercase()
+        return when {
+            "gemini-1.5-pro" in lower || "gemini-2.0-pro" in lower || "gemini-3.1-pro" in lower -> 2_000_000L
+            "gemini" in lower -> 1_000_000L
+            "claude" in lower -> 200_000L
+            "deepseek" in lower -> 64_000L
+            "gpt-4o" in lower || "gpt-4.5" in lower || "o1" in lower || "o3" in lower -> 128_000L
+            else -> 128_000L
+        }
+    }
+
+    /** Процент использования контекста текущей сессии (0-100%). */
+    fun contextUsagePercent(): Int {
+        val total = usageState.value.total().takeIf { it > 0 }
+            ?: dev.merta.app.data.chat.SessionUsage.estimateFromMessages(_state.value.messages).total()
+        val limit = contextLimitForCurrent()
+        if (limit <= 0L || total <= 0L) return 0
+        return ((total * 100) / limit).toInt().coerceIn(0, 100)
     }
 
     /**
@@ -646,6 +851,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     TurnMessage(
                         role = if (it.role == ChatMessage.Role.USER) "user" else "assistant",
                         content = it.text,
+                        attachments = it.attachments,
                     )
                 },
         )
@@ -786,11 +992,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val sessionId = _state.value.sessionId
         val system = transcript.firstOrNull { it.role == "system" }?.content.orEmpty()
         val convId = agyConversations[sessionId]
+        val lastUserMsg = _state.value.messages.lastOrNull { it.role == ChatMessage.Role.USER }
+        val attNote = lastUserMsg?.attachments?.joinToString("\n") {
+            "[Прикреплён файл: ${it.name}, путь: ${it.localPath ?: it.uri} (${it.mimeType})]"
+        }.orEmpty()
+        val fullLastUser = if (attNote.isNotBlank()) "$lastUser\n\n$attNote" else lastUser
         // Первый ход беседы: к системному добавляем доку по устройству (мост /shell).
         val prompt = if (convId == null && system.isNotBlank()) {
-            "$system$AGY_DEVICE_SECTION\n\n$lastUser"
+            "$system$AGY_DEVICE_SECTION\n\n$fullLastUser"
         } else {
-            lastUser
+            fullLastUser
         }
         val model = settings.selectedModel(provider.id).ifBlank { null }
         val dirs = scopeState.value?.allowedRoots
@@ -1025,6 +1236,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        val ctxPercent = contextUsagePercent()
+        _state.update { it.copy(contextPercent = ctxPercent) }
     }
 
     private fun describeError(e: LlmException): String {
@@ -1104,7 +1317,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {
         }
         try {
-            dev.merta.app.adb.ShizukuOpsImpl(getApplication()).removePermissionListener(shizukuPermListener)
+            val ops = dev.merta.app.adb.ShizukuOpsImpl(getApplication())
+            ops.removePermissionListener(shizukuPermListener)
+            ops.removeBinderReceivedListener(shizukuReceivedListener)
+            ops.removeBinderDeadListener(shizukuDeadListener)
         } catch (_: Exception) {
         }
     }

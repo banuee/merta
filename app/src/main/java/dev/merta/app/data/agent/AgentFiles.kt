@@ -206,7 +206,8 @@ class AgentFiles(context: Context) {
                 "- run_command {\"command\", \"workdir\"?} — shell телефона с правами ADB (sh -c, 60с). Тоже с подтверждением. Запрещены rm -rf /, mkfs, dd, форк-бомбы.\n" +
                 "- install_apk {\"path\"} — установить APK (только /sdcard/…). С подтверждением.\n" +
                 "- list_packages {\"filter\"?} — установленные пакеты.\n" +
-                "- tap_screen {\"x\", \"y\"} / swipe_screen {\"x1\",\"y1\",\"x2\",\"y2\"} — тап/свайп по экрану. С подтверждением.\n\n" +
+                "- tap_screen {\"x\", \"y\"} / swipe_screen {\"x1\",\"y1\",\"x2\",\"y2\"} — тап/свайп по экрану. С подтверждением.\n" +
+                "- graphify {\"action\", \"target\"?, \"target2\"?, \"workdir\"?} — граф кода: query (поиск по графу), path (связи A→B), explain (узлы), update/build (индексация графа).\n\n" +
                 "ПРАВИЛА:\n" +
                 "- Работай только внутри разрешённых папок из запроса (список приложен к каждому сообщению); наружу — нельзя, инструмент вернёт error.\n" +
                 "- Не выдумывай содержимое файлов — сначала read_file/list_dir/grep_search.\n" +

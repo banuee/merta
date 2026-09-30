@@ -216,6 +216,16 @@ class MertaSettings(context: Context) {
         prefs.edit().putBoolean(KEY_AUTO_APPROVE, on).apply()
     }
 
+    /** Отключенные пользователем скиллы (по имени директории скилла). */
+    fun loadDisabledSkills(): Set<String> =
+        prefs.getStringSet(KEY_DISABLED_SKILLS, emptySet()) ?: emptySet()
+
+    fun setSkillEnabled(dirName: String, enabled: Boolean) {
+        val current = loadDisabledSkills().toMutableSet()
+        if (enabled) current.remove(dirName) else current.add(dirName)
+        prefs.edit().putStringSet(KEY_DISABLED_SKILLS, current).apply()
+    }
+
     companion object {
         private const val KEY_BASE_URL = "llm_base_url"
         private const val KEY_API_KEY = "llm_api_key"
@@ -229,6 +239,7 @@ class MertaSettings(context: Context) {
         private const val KEY_PRICING = "llm_pricing_cache"
         private const val KEY_SELECTED = "llm_selected_models"
         private const val KEY_AUTO_APPROVE = "agent_auto_approve"
+        private const val KEY_DISABLED_SKILLS = "agent_disabled_skills"
         private const val KEY_AGY_MIGRATED = "llm_agy_migrated"
 
         private fun slugFor(baseUrl: String): String {
